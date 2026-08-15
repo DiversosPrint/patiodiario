@@ -5,6 +5,7 @@ const yards = ['Todos', 'Cajamar', 'Jaraguá', 'Bandeirantes', 'Pátio Superior'
 const outsideStatuses = new Set(['Em rota', 'Fora do pátio', 'Entregue', 'Liberado']);
 let state = { user: null, vehicles: [], history: [], checklistTemplate: {} };
 let activeYard = 'Todos';
+let activeMetricFilter = '';
 let weekOffset = 0;
 let deferredInstallPrompt = null;
 
@@ -51,7 +52,7 @@ function presenceDurationMs(vehicle) {
 }
 function durationLabel(milliseconds) { const hours = Math.floor(milliseconds / 3600000); if (hours < 24) return `${hours}h`; const days = Math.floor(hours / 24); const remainingHours = hours % 24; return `${days}d${remainingHours ? ` ${remainingHours}h` : ''}`; }
 function yardDays(vehicle) { return Math.floor(presenceDurationMs(vehicle) / 86400000); }
-function statusTone(status) { if (outsideStatuses.has(status)) return 'outside'; if (status === 'Em manutenção') return 'attention'; if (status === 'Aguardando operação') return 'waiting'; return 'present'; }
+function statusTone(status) { if (outsideStatuses.has(status)) return 'outside'; if (status === 'Em manutenção' || status === 'Sinistro') return 'attention'; if (status === 'Aguardando operação') return 'waiting'; return 'present'; }
 function vehicleEvents(vehicle) { return state.history.filter(event => event.vehicleId === vehicle.id || (!event.vehicleId && event.plate === vehicle.plate)); }
 function lastEvent(vehicle) { return vehicleEvents(vehicle).sort((a, b) => new Date(b.at) - new Date(a.at))[0]; }
 function eventsOn(date, vehicle = null) { const key = localDateKey(date); return state.history.filter(event => localDateKey(event.at) === key && (!vehicle || event.vehicleId === vehicle.id || event.plate === vehicle.plate)); }
@@ -84,13 +85,13 @@ function renderDailyMetrics() {
   const movements = state.history.filter(event => localDateKey(event.at) === today && /Movimenta|Pátio alterado|cadastrado/i.test(event.action)).length;
   const attention = present.filter(vehicle => vehicle.status === 'Em manutenção' || /sinistro|bloqueado/i.test(`${vehicle.status} ${vehicle.notes}`)).length;
   const cards = [
-    { value: present.length, label: 'No pátio agora', detail: `${state.vehicles.length - present.length} fora / em rota`, tone: 'blue', icon: 'P' },
-    { value: checked, label: 'Conferidos hoje', detail: `${state.vehicles.length ? Math.round(checked / state.vehicles.length * 100) : 0}% dos veículos`, tone: 'green', icon: '✓' },
-    { value: pendingChecks, label: 'Faltam conferir', detail: 'Sem OK ou Não OK hoje', tone: pendingChecks ? 'red' : 'green', icon: pendingChecks ? '!' : '✓' },
-    { value: movements, label: 'Movimentações hoje', detail: 'Pátio, vaga ou status', tone: 'cyan', icon: 'M' },
-    { value: attention, label: 'Exigem atenção', detail: 'Manutenção ou bloqueio', tone: 'amber', icon: 'A' }
+    { filter: 'present', value: present.length, label: 'No pátio agora', detail: `${state.vehicles.length - present.length} fora / em rota`, tone: 'blue', icon: 'P' },
+    { filter: 'checked', value: checked, label: 'Conferidos hoje', detail: `${state.vehicles.length ? Math.round(checked / state.vehicles.length * 100) : 0}% dos veículos`, tone: 'green', icon: '✓' },
+    { filter: 'pending', value: pendingChecks, label: 'Faltam conferir', detail: 'Sem OK ou Não OK hoje', tone: pendingChecks ? 'red' : 'green', icon: pendingChecks ? '!' : '✓' },
+    { filter: 'movements', value: movements, label: 'Movimentações hoje', detail: 'Pátio, vaga ou status', tone: 'cyan', icon: 'M' },
+    { filter: 'attention', value: attention, label: 'Exigem atenção', detail: 'Manutenção ou bloqueio', tone: 'amber', icon: 'A' }
   ];
-  $('#dailyMetrics').innerHTML = cards.map(card => `<article class="summary-card"><span class="summary-icon ${card.tone}">${card.icon}</span><div><b>${card.value}</b><strong>${card.label}</strong><small>${card.detail}</small></div></article>`).join('');
+  $('#dailyMetrics').innerHTML = cards.map(card => `<article class="summary-card ${activeMetricFilter === card.filter ? 'active' : ''}" data-metric-filter="${card.filter}" role="button" tabindex="0" title="Filtrar por ${card.label}"><span class="summary-icon ${card.tone}">${card.icon}</span><div><b>${card.value}</b><strong>${card.label}</strong><small>${card.detail}</small></div></article>`).join('');
 }
 
 function renderYards() {
@@ -103,11 +104,19 @@ function renderYards() {
 function filteredVehicles() {
   const query = $('#search').value.trim().toLowerCase();
   const status = $('#statusFilter').value;
+  const operation = $('#operationFilter').value;
+  const checklist = $('#checklistFilter').value;
+  const readyOnly = $('#readyFilter').checked;
+  const today = localDateKey();
   return state.vehicles.filter(vehicle => {
     const yardMatches = activeYard === 'Todos' || vehicle.yard === activeYard;
     const statusMatches = status === 'all' || (status === 'Em rota' ? outsideStatuses.has(vehicle.status) : vehicle.status === status);
+    const operationMatches = operation === 'all' || (vehicle.operation || 'Diversos') === operation;
+    const checklistMatches = checklist === 'all' || (checklist === 'ok' ? vehicle.available : !vehicle.available);
+    const readyMatches = !readyOnly || vehicle.ready === true;
+    const metricMatches = !activeMetricFilter || (activeMetricFilter === 'present' && isPresent(vehicle)) || (activeMetricFilter === 'checked' && Boolean(presenceEventOn(vehicle))) || (activeMetricFilter === 'pending' && !presenceEventOn(vehicle)) || (activeMetricFilter === 'movements' && vehicleEvents(vehicle).some(event => localDateKey(event.at) === today && /Movimenta|Pátio alterado|cadastrado/i.test(event.action))) || (activeMetricFilter === 'attention' && (vehicle.status === 'Em manutenção' || /sinistro|bloqueado/i.test(`${vehicle.status} ${vehicle.notes}`)));
     const text = [vehicle.plate, vehicle.fleet, vehicle.type, vehicle.position, vehicle.linkedPlates, vehicle.yard].join(' ').toLowerCase();
-    return yardMatches && statusMatches && text.includes(query);
+    return yardMatches && statusMatches && operationMatches && checklistMatches && readyMatches && metricMatches && text.includes(query);
   }).sort((a, b) => Number(isPresent(b)) - Number(isPresent(a)) || String(a.yard).localeCompare(String(b.yard), 'pt-BR') || String(a.plate).localeCompare(String(b.plate), 'pt-BR'));
 }
 
@@ -124,8 +133,8 @@ function renderVehicles() {
     const duration = durationLabel(presenceDurationMs(vehicle));
     const todayPresence = presenceEventOn(vehicle);
     return `<div class="vehicle-row ${isPresent(vehicle) ? '' : 'is-outside'}" data-id="${vehicle.id}" role="button" tabindex="0">
-      <span class="vehicle-cell identity">${plateHtml(vehicle)}<span><b>${esc(vehicle.type || 'Veículo')}</b><small>${esc(vehicle.fleet ? `Frota ${vehicle.fleet}` : vehicle.linkedPlates || 'Sem conjunto vinculado')}</small></span></span>
-      <span class="vehicle-cell"><small>Pátio</small><b>${esc(vehicle.yard || 'Não informado')}</b><em>${esc(vehicle.position || 'Posição não informada')}</em></span>
+      <span class="vehicle-cell identity">${plateHtml(vehicle)}<span><b>${esc(vehicle.type || 'Veículo')}</b><small>${esc(vehicle.operation || 'Diversos')}${vehicle.operation === 'Diversos' && vehicle.color ? ` · ${esc(vehicle.color)}` : ''}</small></span></span>
+      <span class="vehicle-cell"><small>Pátio</small><b>${esc(vehicle.yard || 'Não informado')}</b><em>${esc(vehicle.linkedPlates || 'Sem conjunto vinculado')}</em></span>
       <span class="vehicle-cell"><small>Status</small><i class="status-pill ${statusTone(vehicle.status)}">${esc(vehicle.status || 'No pátio')}</i></span>
       <span class="vehicle-cell permanence"><small>${isPresent(vehicle) ? 'Permanência atual' : 'Última permanência'}</small><b>${duration}</b><em>${isPresent(vehicle) ? `Desde ${formatDateTime(presenceStart(vehicle))}` : `Saída ${formatDateTime(vehicle.presenceEndedAt || latestPresenceEvent(vehicle)?.at)}`}</em></span>
       <span class="vehicle-cell daily-check-cell"><small>Presença hoje</small><span class="presence-actions"><button type="button" class="presence-button yes ${todayPresence?.present === true ? 'active' : ''}" data-presence-id="${vehicle.id}" data-present="true">OK</button><button type="button" class="presence-button no ${todayPresence?.present === false ? 'active' : ''}" data-presence-id="${vehicle.id}" data-present="false">Não OK</button></span><em>${todayPresence ? `${todayPresence.present ? 'No pátio' : 'Fora'} · ${formatDateTime(todayPresence.at)}` : 'Aguardando conferência'}</em></span>
@@ -133,7 +142,7 @@ function renderVehicles() {
       <span class="row-action">Editar →</span>
     </div>`;
   }).join('');
-  $('#vehicleTable').innerHTML = `<div class="table-head"><span>Veículo</span><span>Localização</span><span>Status</span><span>Permanência</span><span>OK diário</span><span>Última movimentação</span><span></span></div>${rows}`;
+  $('#vehicleTable').innerHTML = `<div class="table-head"><span>Veículo / operação</span><span>Localização</span><span>Status</span><span>Permanência</span><span>OK diário</span><span>Última movimentação</span><span></span></div>${rows}`;
 }
 
 function startOfSelectedWeek() {
@@ -232,15 +241,36 @@ function openVehicleTimeline(id) {
 function openVehicle(id = '') {
   const vehicle = state.vehicles.find(item => item.id === id);
   $('#vehicleForm').reset();
+  $('#photos').dataset.loaded = JSON.stringify(vehicle?.photos || []);
+  $('#incidentPhotos').dataset.loaded = JSON.stringify(vehicle?.incidentPhotos || []);
   $('#vehicleId').value = vehicle?.id || '';
   $('#dialogTitle').textContent = vehicle ? `Atualizar ${vehicle.plate}` : 'Registrar veículo no pátio';
   $('#plate').disabled = Boolean(vehicle);
-  const fields = ['plate', 'brand', 'type', 'model', 'fleet', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'stage', 'status', 'yard', 'position', 'linkedPlates', 'notes'];
+  const fields = ['plate', 'brand', 'type', 'model', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'color', 'stage', 'status', 'yard', 'linkedPlates', 'notes'];
   fields.forEach(key => { if (vehicle) $(`#${key}`).value = vehicle[key] || ''; });
+  $('#ready').checked = vehicle?.ready === true;
   if (!vehicle) { $('#enteredAt').value = localDateKey(); $('#status').value = 'No pátio'; $('#stage').value = 'Controle de pátio'; }
+  renderChecklistFields(vehicle);
+  renderPhotoPreview(vehicle?.photos || []);
+  renderIncidentPhotoPreview(vehicle?.incidentPhotos || []);
+  toggleColorField();
   $('#deleteVehicle').classList.toggle('hidden', !vehicle || state.user.role !== 'admin');
   $('#vehicleDialog').showModal();
 }
+
+function checklistId(label) { return `check-${String(label).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`; }
+function renderChecklistFields(vehicle) {
+  const template = state.checklistTemplate || {};
+  const current = vehicle?.checklist || {};
+  const html = Object.entries(template).map(([area, labels]) => `<div class="checklist-area"><b>${esc(area.replace(/^[a-z]/, value => value.toUpperCase()))}</b>${labels.map(label => { const item = (current[area] || []).find(entry => entry.label === label); return `<label>${esc(label)}<select id="${checklistId(label)}" data-checklist="${esc(label)}"><option value="pendente" ${item?.status === 'pendente' ? 'selected' : ''}>Pendente</option><option value="concluido" ${item?.status === 'concluido' ? 'selected' : ''}>Conforme</option><option value="nao_aplicado" ${item?.status === 'nao_aplicado' ? 'selected' : ''}>Não se aplica</option></select></label>`; }).join('')}</div>`).join('');
+  $('#checklistFields').innerHTML = html || '<p class="muted">Nenhum item configurado.</p>';
+}
+function toggleColorField() {
+  const field = $('#color')?.closest('label');
+  if (field) field.classList.toggle('hidden', $('#operation').value !== 'Diversos');
+}
+function renderPhotoPreview(photos) { $('#photoPreview').innerHTML = photos.length ? photos.map((photo, index) => `<img src="${esc(photo)}" alt="Foto ${index + 1} da carreta">`).join('') : '<span class="muted">Nenhuma foto anexada.</span>'; }
+function renderIncidentPhotoPreview(photos) { $('#incidentPhotoPreview').innerHTML = photos.length ? photos.map((photo, index) => `<img src="${esc(photo)}" alt="Foto ${index + 1} do sinistro">`).join('') : '<span class="muted">Nenhuma foto de sinistro anexada.</span>'; }
 
 function renderHistory() {
   $('#historyList').innerHTML = state.history.length ? state.history.map(event => `<div class="history-item"><time>${formatDateTime(event.at)}</time><span class="history-marker"></span><div><b>${esc(event.action)} · ${esc(event.plate)}</b><span>${esc(event.detail || [event.yard, event.position, event.status].filter(Boolean).join(' · ') || 'Sem detalhes')}</span><small>${esc(event.user)}</small></div></div>`).join('') : '<div class="empty"><b>Nenhum evento registrado</b></div>';
@@ -252,13 +282,22 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   $('#weeklyView').classList.toggle('hidden', button.dataset.view !== 'weekly');
   if (button.dataset.view === 'weekly') renderWeekly();
 }));
+async function loadPhotoFiles(input, preview, key, label) { const files = [...(input.files || [])].slice(0, 8); const photos = await Promise.all(files.map(file => new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(file); }))); preview(photos); input.dataset.loaded = JSON.stringify(photos); }
+$('#photos').addEventListener('change', event => loadPhotoFiles(event.target, renderPhotoPreview, 'photos', 'carreta'));
+$('#incidentPhotos').addEventListener('change', event => loadPhotoFiles(event.target, renderIncidentPhotoPreview, 'incidentPhotos', 'sinistro'));
 $('#loginForm').addEventListener('submit', async event => { event.preventDefault(); $('#loginError').textContent = ''; try { const data = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) }); await enter(data.user); } catch (error) { $('#loginError').textContent = error.message; } });
 $('#showPassword').onclick = () => { $('#password').type = $('#password').type === 'password' ? 'text' : 'password'; };
+$('#operation').onchange = toggleColorField;
 $('#logout').onclick = async () => { await request('/api/logout', { method: 'POST' }); loginScreen(); };
 $('#newVehicle').onclick = () => openVehicle();
+$('#dailyMetrics').onclick = event => { const card = event.target.closest('[data-metric-filter]'); if (!card) return; activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };
+$('#dailyMetrics').onkeydown = event => { if (event.key !== 'Enter' && event.key !== ' ') return; const card = event.target.closest('[data-metric-filter]'); if (!card) return; event.preventDefault(); activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };
 $('#yardTabs').onclick = event => { const button = event.target.closest('[data-yard]'); if (button) { activeYard = button.dataset.yard; renderYards(); renderVehicles(); } };
 $('#search').oninput = renderVehicles;
 $('#statusFilter').onchange = renderVehicles;
+$('#operationFilter').onchange = renderVehicles;
+$('#checklistFilter').onchange = renderVehicles;
+$('#readyFilter').onchange = renderVehicles;
 $('#vehicleTable').onclick = async event => {
   const presenceButton = event.target.closest('[data-presence-id]');
   if (presenceButton) {
@@ -284,11 +323,26 @@ document.querySelectorAll('[data-close]').forEach(button => button.onclick = () 
 $('#vehicleForm').addEventListener('submit', async event => {
   event.preventDefault();
   const id = $('#vehicleId').value;
-  const fields = ['plate', 'brand', 'type', 'model', 'fleet', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'stage', 'status', 'yard', 'position', 'linkedPlates', 'notes'];
+  const fields = ['plate', 'brand', 'type', 'model', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'color', 'stage', 'status', 'yard', 'linkedPlates', 'notes'];
   const payload = Object.fromEntries(fields.map(key => [key, $(`#${key}`).value]));
+  payload.ready = $('#ready').checked;
+  payload.checklist = Object.fromEntries(Object.entries(state.checklistTemplate).map(([area, labels]) => [area, labels.map(label => ({ label, status: $(`#check-${CSS.escape(label)}`)?.value || 'pendente', note: '' }))]));
+  payload.photos = JSON.parse($('#photos').dataset.loaded || '[]');
+  payload.incidentPhotos = JSON.parse($('#incidentPhotos').dataset.loaded || '[]');
   try { await request(id ? `/api/vehicles/${id}` : '/api/vehicles', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); $('#vehicleDialog').close(); await load(); toast(id ? 'Movimentação registrada.' : 'Veículo registrado no pátio.'); } catch (error) { toast(error.message); }
 });
 $('#deleteVehicle').onclick = async () => { const id = $('#vehicleId').value; if (!id || !confirm('Excluir este veículo do controle? O histórico será preservado.')) return; try { await request(`/api/vehicles/${id}`, { method: 'DELETE' }); $('#vehicleDialog').close(); await load(); toast('Veículo excluído.'); } catch (error) { toast(error.message); } };
+function generatePdfReport() {
+  const params = { pronta: $('#readyFilter').checked, operacao: $('#operationFilter').value };
+  let vehicles = filteredVehicles();
+  const title = params.pronta ? 'Carretas prontas' : params.operacao === 'all' ? 'Relatório de carretas' : `Carretas · ${params.operacao}`;
+  const rows = vehicles.map(vehicle => `<tr><td>${esc(vehicle.plate)}</td><td>${esc(vehicle.yard || '—')}</td><td>${esc(vehicle.operation || 'Diversos')}</td><td>${vehicle.operation === 'Diversos' ? esc(vehicle.color || '—') : '—'}</td><td>${vehicle.ready ? 'PRONTA' : 'Não pronta'}</td><td>${esc(vehicle.notes || '—')}</td></tr>`).join('');
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) { toast('Permita pop-ups para gerar o PDF.'); return; }
+  printWindow.document.write(`<html><head><title>${title}</title><style>body{font-family:Arial,sans-serif;color:#18283d;padding:28px}h1{font-size:22px;margin:0 0 4px}p{color:#69778a;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:22px;font-size:12px}th,td{text-align:left;padding:9px;border-bottom:1px solid #dce3ec}th{background:#edf3f9;font-size:10px;text-transform:uppercase}@media print{button{display:none}}</style></head><body><h1>${title}</h1><p>Controle de Pátios · ${new Date().toLocaleString('pt-BR')} · ${vehicles.length} registro(s)</p><table><thead><tr><th>Placa</th><th>Pátio</th><th>Operação</th><th>Cor</th><th>Situação</th><th>Observações</th></tr></thead><tbody>${rows || '<tr><td colspan="6">Nenhum registro encontrado.</td></tr>'}</tbody></table><button onclick="window.print()">Imprimir / Salvar como PDF</button></body></html>`);
+  printWindow.document.close(); printWindow.focus();
+}
+$('#pdfButton').onclick = generatePdfReport;
 $('#historyButton').onclick = () => { renderHistory(); $('#historyDialog').showModal(); };
 $('[data-close-history]').onclick = () => $('#historyDialog').close();
 $('[data-close-timeline]').onclick = () => $('#timelineDialog').close();
