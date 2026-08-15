@@ -51,7 +51,7 @@ function json(res, status, body) {
 function body(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', chunk => { raw += chunk; if (raw.length > 1e6) reject(new Error('Conteúdo muito grande.')); });
+    req.on('data', chunk => { raw += chunk; if (raw.length > 8e6) reject(new Error('As imagens excedem o limite de 8 MB. Reduza a quantidade ou o tamanho das fotos.')); });
     req.on('end', () => { try { resolve(raw ? JSON.parse(raw) : {}); } catch { reject(new Error('JSON inválido.')); } });
   });
 }
