@@ -147,10 +147,10 @@ function startOfSelectedWeek() {
   const date = new Date();
   const day = date.getDay() || 7;
   date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() - day + 1 + weekOffset * 7);
+  date.setDate(date.getDate() - day + 1 - 7 + weekOffset * 7);
   return date;
 }
-function weekDays() { const start = startOfSelectedWeek(); return Array.from({ length: 7 }, (_, index) => { const date = new Date(start); date.setDate(start.getDate() + index); return date; }); }
+function weekDays() { const start = startOfSelectedWeek(); return Array.from({ length: 21 }, (_, index) => { const date = new Date(start); date.setDate(start.getDate() + index); return date; }); }
 function snapshotForDay(vehicle, date) {
   const entered = parseDate(vehicle.enteredAt || vehicle.createdAt);
   const end = new Date(date); end.setHours(23, 59, 59, 999);
@@ -161,9 +161,10 @@ function snapshotForDay(vehicle, date) {
 
 function renderWeekly() {
   const days = weekDays();
-  $('#weekLabel').textContent = `${formatDate(days[0], { day: '2-digit', month: 'long' })} a ${formatDate(days[6], { day: '2-digit', month: 'long', year: 'numeric' })}`;
-  const weekEvents = state.history.filter(event => { const at = new Date(event.at); const end = new Date(days[6]); end.setHours(23, 59, 59, 999); return at >= days[0] && at <= end; });
-  const entries = state.vehicles.filter(vehicle => { const entered = parseDate(vehicle.enteredAt); return entered && entered >= days[0] && entered <= new Date(days[6].getTime() + 86399999); }).length;
+  const lastDay = days.at(-1);
+  $('#weekLabel').textContent = `${formatDate(days[0], { day: '2-digit', month: 'long' })} a ${formatDate(lastDay, { day: '2-digit', month: 'long', year: 'numeric' })}`;
+  const weekEvents = state.history.filter(event => { const at = new Date(event.at); const end = new Date(lastDay); end.setHours(23, 59, 59, 999); return at >= days[0] && at <= end; });
+  const entries = state.vehicles.filter(vehicle => { const entered = parseDate(vehicle.enteredAt); return entered && entered >= days[0] && entered <= new Date(lastDay.getTime() + 86399999); }).length;
   const movedVehicles = new Set(weekEvents.filter(event => /Movimenta|Pátio alterado/i.test(event.action)).map(event => event.vehicleId || event.plate)).size;
   const peak = Math.max(0, ...days.map(day => state.vehicles.filter(vehicle => snapshotForDay(vehicle, day) && isPresentAt(vehicle, day)).length));
   const longStay = state.vehicles.filter(vehicle => isPresent(vehicle) && yardDays(vehicle) >= 7).length;
@@ -326,6 +327,7 @@ $('#nextWeek').onclick = () => { weekOffset += 1; renderWeekly(); };
 $('#weeklyVehicleFilter').onchange = () => renderWeeklyTable(weekDays());
 $('#weeklyTable').onclick = event => { const row = event.target.closest('[data-timeline-id]'); if (row) openVehicleTimeline(row.dataset.timelineId); };
 $('#weeklyTable').onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { const row = event.target.closest('[data-timeline-id]'); if (row) { event.preventDefault(); openVehicleTimeline(row.dataset.timelineId); } } };
+(() => { const scroller = $('.weekly-table'); let dragging = false; let startX = 0; let startScroll = 0; scroller.addEventListener('pointerdown', event => { dragging = true; startX = event.clientX; startScroll = scroller.scrollLeft; scroller.setPointerCapture(event.pointerId); }); scroller.addEventListener('pointermove', event => { if (dragging) scroller.scrollLeft = startScroll - (event.clientX - startX); }); scroller.addEventListener('pointerup', () => { dragging = false; }); scroller.addEventListener('pointercancel', () => { dragging = false; }); })();
 document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => $('#vehicleDialog').close());
 $('#vehicleForm').addEventListener('submit', async event => {
   event.preventDefault();
