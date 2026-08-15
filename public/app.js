@@ -106,17 +106,15 @@ function filteredVehicles() {
   const status = $('#statusFilter').value;
   const operation = $('#operationFilter').value;
   const checklist = $('#checklistFilter').value;
-  const readyOnly = $('#readyFilter').checked;
   const today = localDateKey();
   return state.vehicles.filter(vehicle => {
     const yardMatches = activeYard === 'Todos' || vehicle.yard === activeYard;
-    const statusMatches = status === 'all' || (status === 'Em rota' ? outsideStatuses.has(vehicle.status) : vehicle.status === status);
+    const statusMatches = status === 'all' || (status === 'ready' ? vehicle.ready === true : status === 'Em rota' ? outsideStatuses.has(vehicle.status) : vehicle.status === status);
     const operationMatches = operation === 'all' || (vehicle.operation || 'Diversos') === operation;
     const checklistMatches = checklist === 'all' || (checklist === 'ok' ? vehicle.available : !vehicle.available);
-    const readyMatches = !readyOnly || vehicle.ready === true;
     const metricMatches = !activeMetricFilter || (activeMetricFilter === 'present' && isPresent(vehicle)) || (activeMetricFilter === 'checked' && Boolean(presenceEventOn(vehicle))) || (activeMetricFilter === 'pending' && !presenceEventOn(vehicle)) || (activeMetricFilter === 'movements' && vehicleEvents(vehicle).some(event => localDateKey(event.at) === today && /Movimenta|Pátio alterado|cadastrado/i.test(event.action))) || (activeMetricFilter === 'attention' && (vehicle.status === 'Em manutenção' || /sinistro|bloqueado/i.test(`${vehicle.status} ${vehicle.notes}`)));
     const text = [vehicle.plate, vehicle.fleet, vehicle.type, vehicle.position, vehicle.linkedPlates, vehicle.yard].join(' ').toLowerCase();
-    return yardMatches && statusMatches && operationMatches && checklistMatches && readyMatches && metricMatches && text.includes(query);
+    return yardMatches && statusMatches && operationMatches && checklistMatches && metricMatches && text.includes(query);
   }).sort((a, b) => Number(isPresent(b)) - Number(isPresent(a)) || String(a.yard).localeCompare(String(b.yard), 'pt-BR') || String(a.plate).localeCompare(String(b.plate), 'pt-BR'));
 }
 
@@ -269,8 +267,8 @@ function toggleColorField() {
   const field = $('#color')?.closest('label');
   if (field) field.classList.toggle('hidden', $('#operation').value !== 'Diversos');
 }
-function renderPhotoPreview(photos) { $('#photoPreview').innerHTML = photos.length ? photos.map((photo, index) => `<img src="${esc(photo)}" alt="Foto ${index + 1} da carreta">`).join('') : '<span class="muted">Nenhuma foto anexada.</span>'; }
-function renderIncidentPhotoPreview(photos) { $('#incidentPhotoPreview').innerHTML = photos.length ? photos.map((photo, index) => `<img src="${esc(photo)}" alt="Foto ${index + 1} do sinistro">`).join('') : '<span class="muted">Nenhuma foto de sinistro anexada.</span>'; }
+function renderPhotoPreview(photos) { $('#photoPreview').innerHTML = photos.length ? photos.map((photo, index) => `<img class="preview-image" data-image="${esc(photo)}" src="${esc(photo)}" alt="Foto ${index + 1} da carreta">`).join('') : '<span class="muted">Nenhuma foto anexada.</span>'; }
+function renderIncidentPhotoPreview(photos) { $('#incidentPhotoPreview').innerHTML = photos.length ? photos.map((photo, index) => `<img class="preview-image" data-image="${esc(photo)}" src="${esc(photo)}" alt="Foto ${index + 1} do sinistro">`).join('') : '<span class="muted">Nenhuma foto de sinistro anexada.</span>'; }
 
 function renderHistory() {
   $('#historyList').innerHTML = state.history.length ? state.history.map(event => `<div class="history-item"><time>${formatDateTime(event.at)}</time><span class="history-marker"></span><div><b>${esc(event.action)} · ${esc(event.plate)}</b><span>${esc(event.detail || [event.yard, event.position, event.status].filter(Boolean).join(' · ') || 'Sem detalhes')}</span><small>${esc(event.user)}</small></div></div>`).join('') : '<div class="empty"><b>Nenhum evento registrado</b></div>';
@@ -282,9 +280,12 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
   $('#weeklyView').classList.toggle('hidden', button.dataset.view !== 'weekly');
   if (button.dataset.view === 'weekly') renderWeekly();
 }));
-async function loadPhotoFiles(input, preview, key, label) { const files = [...(input.files || [])].slice(0, 8); const photos = await Promise.all(files.map(file => new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(file); }))); preview(photos); input.dataset.loaded = JSON.stringify(photos); }
-$('#photos').addEventListener('change', event => loadPhotoFiles(event.target, renderPhotoPreview, 'photos', 'carreta'));
-$('#incidentPhotos').addEventListener('change', event => loadPhotoFiles(event.target, renderIncidentPhotoPreview, 'incidentPhotos', 'sinistro'));
+function compressImage(file, maxSize = 1280, quality = .72) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = reject; reader.onload = () => { const image = new Image(); image.onload = () => { const scale = Math.min(1, maxSize / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale)); canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height); resolve(canvas.toDataURL('image/jpeg', quality)); }; image.onerror = reject; image.src = reader.result; }; reader.readAsDataURL(file); }); }
+async function loadPhotoFiles(input, preview) { const files = [...(input.files || [])].slice(0, 8); try { const photos = await Promise.all(files.map(file => compressImage(file))); preview(photos); input.dataset.loaded = JSON.stringify(photos); toast('Fotos comprimidas e prontas para salvar.'); } catch { toast('Não foi possível processar uma das imagens.'); } }
+$('#photos').addEventListener('change', event => loadPhotoFiles(event.target, renderPhotoPreview));
+$('#incidentPhotos').addEventListener('change', event => loadPhotoFiles(event.target, renderIncidentPhotoPreview));
+document.addEventListener('click', event => { const image = event.target.closest('.preview-image'); if (!image) return; $('#expandedImage').src = image.dataset.image; $('#imageDialog').showModal(); });
+$('#closeImage').onclick = () => $('#imageDialog').close();
 $('#loginForm').addEventListener('submit', async event => { event.preventDefault(); $('#loginError').textContent = ''; try { const data = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) }); await enter(data.user); } catch (error) { $('#loginError').textContent = error.message; } });
 $('#showPassword').onclick = () => { $('#password').type = $('#password').type === 'password' ? 'text' : 'password'; };
 $('#operation').onchange = toggleColorField;
@@ -297,7 +298,6 @@ $('#search').oninput = renderVehicles;
 $('#statusFilter').onchange = renderVehicles;
 $('#operationFilter').onchange = renderVehicles;
 $('#checklistFilter').onchange = renderVehicles;
-$('#readyFilter').onchange = renderVehicles;
 $('#vehicleTable').onclick = async event => {
   const presenceButton = event.target.closest('[data-presence-id]');
   if (presenceButton) {
@@ -333,7 +333,7 @@ $('#vehicleForm').addEventListener('submit', async event => {
 });
 $('#deleteVehicle').onclick = async () => { const id = $('#vehicleId').value; if (!id || !confirm('Excluir este veículo do controle? O histórico será preservado.')) return; try { await request(`/api/vehicles/${id}`, { method: 'DELETE' }); $('#vehicleDialog').close(); await load(); toast('Veículo excluído.'); } catch (error) { toast(error.message); } };
 function generatePdfReport() {
-  const filter = $('#pdfFilter').value;
+  const filter = $('#pdfChoice').value;
   let vehicles = state.vehicles.filter(vehicle => filter === 'all' || (filter === 'ready' ? vehicle.ready === true : vehicle.status === filter || vehicle.operation === filter));
   const labels = { all: 'Todas as carretas', ready: 'Carretas prontas', Diversos: 'Carretas Diversos', Correios: 'Carretas Correios', 'Em manutenção': 'Carretas em manutenção', Sinistro: 'Carretas com sinistro', 'Aguardando operação': 'Carretas aguardando operação' };
   const title = labels[filter] || 'Relatório de carretas';
@@ -345,7 +345,8 @@ function generatePdfReport() {
   printWindow.document.write(`<html><head><title>${title} · Pátio Print</title><style>@page{size:A4;margin:13mm}*{box-sizing:border-box}body{margin:0;background:#f3f6fa;color:#14253d;font-family:Arial,Helvetica,sans-serif}.report{max-width:860px;margin:0 auto;background:#fff;min-height:100vh;padding:34px 38px}.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0a86bd;padding-bottom:20px}.logo{width:150px;height:auto}.kicker{color:#0a91a7;font-size:10px;font-weight:bold;letter-spacing:1.6px;text-transform:uppercase;margin-top:4px}.title{font-size:25px;margin:8px 0 5px;color:#102d50}.sub{font-size:11px;color:#718096}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.metric{background:#f1f7fb;border:1px solid #dceaf3;border-radius:10px;padding:13px}.metric b{display:block;font-size:22px;color:#0c6eab}.metric span{font-size:10px;color:#6c7d90;text-transform:uppercase;letter-spacing:.5px}.vehicle-card{border:1px solid #dce5ee;border-radius:11px;padding:14px 16px;margin:10px 0;break-inside:avoid}.vehicle-head{display:flex;justify-content:space-between;align-items:center}.plate{font-size:17px;font-weight:800;color:#102d50;letter-spacing:.7px}.vehicle-type{font-size:11px;color:#718096;margin-left:10px}.state{border-radius:20px;padding:6px 9px;font-size:9px;font-weight:bold;letter-spacing:.4px}.state.ready{background:#dff6e9;color:#13784d}.state.waiting{background:#fff1d8;color:#98600b}.vehicle-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:13px;font-size:11px;color:#30455e}.vehicle-meta b{display:block;font-size:9px;color:#8a99a9;text-transform:uppercase;margin-bottom:3px}.vehicle-note{border-left:3px solid #f0a32b;background:#fffaf0;padding:8px 10px;margin:12px 0 0;font-size:11px;color:#59687b}.footer{border-top:1px solid #dce5ee;margin-top:28px;padding-top:14px;display:flex;justify-content:space-between;color:#8290a0;font-size:10px}.signature{font-weight:bold;color:#43617b}@media print{body{background:#fff}.report{padding:0;max-width:none}.print-action{display:none}}@media(max-width:600px){.report{padding:22px}.summary{grid-template-columns:1fr}.vehicle-meta{grid-template-columns:1fr 1fr}}</style></head><body><main class="report"><header class="top"><div><div class="kicker">Controle operacional</div><h1>${title}</h1><div class="sub">Base Print · ${new Date().toLocaleDateString('pt-BR')} · ${vehicles.length} registro(s)</div></div><img class="logo" src="/images/logo-print.png" alt="Print"></header><section class="summary"><div class="metric"><b>${vehicles.length}</b><span>Total no relatório</span></div><div class="metric"><b>${readyCount}</b><span>Prontas</span></div><div class="metric"><b>${maintenanceCount}</b><span>Atenção / sinistro</span></div></section><section>${vehicles.length ? cards : '<article class="vehicle-card">Nenhum registro encontrado para este relatório.</article>'}</section><footer class="footer"><span>Gerado pelo Controle de Pátios</span><span class="signature">Sistema desenvolvido por Ramalho</span></footer><button class="print-action" onclick="window.print()" style="margin-top:22px;padding:11px 16px;border:0;border-radius:8px;background:#087db4;color:#fff;font-weight:bold">Imprimir / Salvar como PDF</button></main></body></html>`);
   printWindow.document.close(); printWindow.focus();
 }
-$('#pdfButton').onclick = generatePdfReport;
+$('#pdfButton').onclick = () => $('#pdfDialog').showModal();
+$('#confirmPdf').onclick = () => { $('#pdfDialog').close(); generatePdfReport(); };
 $('#historyButton').onclick = () => { renderHistory(); $('#historyDialog').showModal(); };
 $('[data-close-history]').onclick = () => $('#historyDialog').close();
 $('[data-close-timeline]').onclick = () => $('#timelineDialog').close();
