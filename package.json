@@ -5,5 +5,6 @@
   "description": "Controle interno de carretas da Operação Diversos Print",
   "main": "server.js",
   "scripts": { "start": "node server.js", "check": "node --check server.js && node --check public/app.js && node --check public/sw.js" },
-  "engines": { "node": ">=18" }
+  "engines": { "node": ">=18" },
+  "dependencies": { "mysql2": "^3.14.3" }
 }

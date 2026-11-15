@@ -13,6 +13,9 @@ let DATA_FILE = path.join(DATA_DIR, 'fleet.json');
 const sessions = new Map();
 const CATALOG_FILE = path.join(ROOT, 'data', 'vehicle-catalog.json');
 let vehicleCatalog = [];
+const databaseConfigured = Boolean(process.env.DB_NAME && process.env.DB_USER && process.env.DB_PASSWORD);
+let dbPool = null;
+let dbReady = null;
 
 const USERS = {
   admin: { password: process.env.PATIO_ADMIN_PASSWORD || '1234', name: 'Administrador', role: 'admin' },
@@ -28,7 +31,7 @@ const CHECKLIST = {
 function initialData() {
   return { vehicles: [], history: [], updatedAt: new Date().toISOString() };
 }
-function readVehicleCatalog() {
+function readLocalVehicleCatalog() {
   try {
     const parsed = JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8'));
     return Array.isArray(parsed.records) ? parsed.records : [];
@@ -36,7 +39,7 @@ function readVehicleCatalog() {
     return [];
   }
 }
-function readData() {
+function readLocalData() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   } catch (error) {
@@ -48,11 +51,49 @@ function readData() {
   if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify(initialData(), null, 2));
   try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch { return initialData(); }
 }
-function saveData(data) {
+function saveLocalData(data) {
   data.updatedAt = new Date().toISOString();
   const temp = `${DATA_FILE}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(data, null, 2));
   fs.renameSync(temp, DATA_FILE);
+}
+async function database() {
+  if (!databaseConfigured) return null;
+  if (!dbReady) {
+    dbReady = (async () => {
+      const mysql = require('mysql2/promise');
+      dbPool = mysql.createPool({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME, waitForConnections: true, connectionLimit: 5, charset: 'utf8mb4' });
+      await dbPool.query('CREATE TABLE IF NOT EXISTS patio_app_state (id TINYINT UNSIGNED PRIMARY KEY, data JSON NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)');
+      await dbPool.query('CREATE TABLE IF NOT EXISTS vehicle_catalog (id VARCHAR(100) PRIMARY KEY, plate VARCHAR(20) NOT NULL, plate_aux VARCHAR(20) NULL, linked_plate VARCHAR(20) NULL, chassis VARCHAR(100) NULL, data JSON NOT NULL, INDEX idx_vehicle_catalog_plate (plate), INDEX idx_vehicle_catalog_chassis (chassis))');
+      const [stateRows] = await dbPool.query('SELECT id FROM patio_app_state WHERE id = 1 LIMIT 1');
+      if (!stateRows.length) await dbPool.query('INSERT INTO patio_app_state (id, data) VALUES (1, ?)', [JSON.stringify(readLocalData())]);
+      const [catalogRows] = await dbPool.query('SELECT COUNT(*) AS total FROM vehicle_catalog');
+      if (!Number(catalogRows[0]?.total)) {
+        const localCatalog = readLocalVehicleCatalog();
+        for (const item of localCatalog) await dbPool.query('INSERT IGNORE INTO vehicle_catalog (id, plate, plate_aux, linked_plate, chassis, data) VALUES (?, ?, ?, ?, ?, ?)', [item.id || crypto.randomUUID(), item.plate || '', item.plateAux || null, item.linkedPlate || null, item.chassis || null, JSON.stringify(item)]);
+      }
+      return dbPool;
+    })();
+  }
+  return dbReady;
+}
+async function readVehicleCatalog() {
+  const db = await database();
+  if (!db) return readLocalVehicleCatalog();
+  const [rows] = await db.query('SELECT data FROM vehicle_catalog');
+  return rows.map(row => typeof row.data === 'string' ? JSON.parse(row.data) : row.data);
+}
+async function readData() {
+  const db = await database();
+  if (!db) return readLocalData();
+  const [rows] = await db.query('SELECT data FROM patio_app_state WHERE id = 1 LIMIT 1');
+  return rows.length ? (typeof rows[0].data === 'string' ? JSON.parse(rows[0].data) : rows[0].data) : initialData();
+}
+async function saveData(data) {
+  data.updatedAt = new Date().toISOString();
+  const db = await database();
+  if (db) { await db.query('INSERT INTO patio_app_state (id, data) VALUES (1, ?) ON DUPLICATE KEY UPDATE data = VALUES(data)', [JSON.stringify(data)]); return; }
+  saveLocalData(data);
 }
 function json(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -136,7 +177,7 @@ async function api(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/logout') { const token = cookies(req).sid; if (token) sessions.delete(token); res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'); return json(res, 200, { ok: true }); }
   const user = currentUser(req); if (!user) return json(res, 401, { error: 'Sessão expirada.' });
   if (req.method === 'GET' && url.pathname === '/api/me') return json(res, 200, { user });
-  const data = readData();
+  const data = await readData();
   if (req.method === 'GET' && url.pathname === '/api/vehicle-catalog') {
     const query = searchKey(url.searchParams.get('q'));
     if (query.length < 1) return json(res, 200, { items: [] });
@@ -160,7 +201,7 @@ async function api(req, res, url) {
     const input = await body(req); const restored = input?.data || input;
     if (!restored || !Array.isArray(restored.vehicles) || !Array.isArray(restored.history)) return json(res, 400, { error: 'Arquivo de backup inválido.' });
     const safeData = { vehicles: restored.vehicles.map(v => ({ ...v, checklist: makeChecklist(v.checklist) })), history: restored.history.slice(0, 2000), updatedAt: new Date().toISOString() };
-    saveData(safeData); return json(res, 200, { ok: true, vehicles: safeData.vehicles.length });
+    await saveData(safeData); return json(res, 200, { ok: true, vehicles: safeData.vehicles.length });
   }
   if (req.method === 'POST' && url.pathname === '/api/vehicles') {
     const input = await body(req); const p = plate(input.plate);
@@ -169,7 +210,7 @@ async function api(req, res, url) {
     const createdAt = new Date().toISOString();
     const operation = ['Correios', 'Diversos'].includes(clean(input.operation)) ? clean(input.operation) : 'Diversos';
     const vehicle = { id: crypto.randomUUID(), plate: p, plateType: plateType(p), type: clean(input.type), brand: clean(input.brand), model: clean(input.model), fleet: clean(input.fleet), chassis: clean(input.chassis), renavam: clean(input.renavam), nf: clean(input.nf), operation, color: operation === 'Diversos' ? clean(input.color) : '', ready: input.ready === true || input.ready === 'true', stage: clean(input.stage) || 'Processos', status: clean(input.status) || 'Aguardando linha', yard: normalizeYard(input.yard), position: clean(input.position), linkedPlates: clean(input.linkedPlates, 100).toUpperCase(), notes: clean(input.notes, 500), enteredAt: input.enteredAt || todayInSaoPaulo(), presenceEvents: [], presenceStartedAt: createdAt, checklist: makeChecklist(input.checklist), photos: Array.isArray(input.photos) ? input.photos.slice(0, 8) : [], incidentPhotos: Array.isArray(input.incidentPhotos) ? input.incidentPhotos.slice(0, 8) : [], createdAt, updatedAt: createdAt };
-    data.vehicles.push(vehicle); audit(data, user, 'Veículo cadastrado', vehicle, vehicle.yard); saveData(data); return json(res, 201, { vehicle: decorate(vehicle) });
+    data.vehicles.push(vehicle); audit(data, user, 'Veículo cadastrado', vehicle, vehicle.yard); await saveData(data); return json(res, 201, { vehicle: decorate(vehicle) });
   }
   const presenceCheckMatch = url.pathname.match(/^\/api\/vehicles\/([^/]+)\/presence-check$/);
   if (presenceCheckMatch && req.method === 'POST') {
@@ -194,7 +235,7 @@ async function api(req, res, url) {
     }
     vehicle.updatedAt = event.at;
     audit(data, user, present ? 'Presença confirmada no pátio' : 'Saída confirmada do pátio', vehicle, present ? 'OK · veículo localizado no pátio' : 'Não OK · veículo não localizado no pátio');
-    saveData(data);
+    await saveData(data);
     return json(res, 200, { ok: true, alreadyChecked: false, event, vehicle: decorate(vehicle) });
   }
   const match = url.pathname.match(/^\/api\/vehicles\/([^/]+)$/); const vehicle = match && data.vehicles.find(v => v.id === match[1]);
@@ -216,18 +257,21 @@ async function api(req, res, url) {
     if (before.position !== vehicle.position) changes.push(`Posição: ${before.position || 'Não informada'} → ${vehicle.position || 'Não informada'}`);
     if (before.status !== vehicle.status) changes.push(`Status: ${before.status || 'Não informado'} → ${vehicle.status || 'Não informado'}`);
     audit(data, user, changes.length ? 'Movimentação registrada' : 'Cadastro atualizado', vehicle, changes.join(' · '));
-    saveData(data); return json(res, 200, { vehicle: decorate(vehicle) });
+    await saveData(data); return json(res, 200, { vehicle: decorate(vehicle) });
   }
   if (vehicle && req.method === 'DELETE') {
     if (user.role !== 'admin') return json(res, 403, { error: 'Apenas o administrador pode excluir.' });
-    data.vehicles = data.vehicles.filter(v => v.id !== vehicle.id); audit(data, user, 'Veículo excluído', vehicle); saveData(data); return json(res, 200, { ok: true });
+    data.vehicles = data.vehicles.filter(v => v.id !== vehicle.id); audit(data, user, 'Veículo excluído', vehicle); await saveData(data); return json(res, 200, { ok: true });
   }
   return json(res, 404, { error: 'Rota não encontrada.' });
 }
 
-vehicleCatalog = readVehicleCatalog();
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) api(req, res, url).catch(err => json(res, 400, { error: err.message || 'Falha na solicitação.' })); else serve(req, res);
 });
-server.listen(PORT, () => console.log(`Controle de Pátio Diversos Print em http://localhost:${PORT}`));
+async function start() {
+  vehicleCatalog = await readVehicleCatalog();
+  server.listen(PORT, () => console.log(`Controle de Pátio Diversos Print em http://localhost:${PORT} · armazenamento: ${databaseConfigured ? 'MySQL' : 'arquivo local'}`));
+}
+start().catch(error => { console.error('Falha ao inicializar o armazenamento:', error.message); process.exit(1); });
