@@ -1,10 +1,11 @@
 'use strict';
 
 const $ = selector => document.querySelector(selector);
-const yards = ['Todos', 'Cajamar', 'Jaraguá', 'Bandeirantes', 'Pátio Superior'];
+const yards = ['Todos', 'Pátio Central', 'Pátio Superior', 'Bandeirantes', 'Cajamar'];
 const outsideStatuses = new Set(['Em rota', 'Fora do pátio', 'Entregue', 'Liberado']);
 let state = { user: null, vehicles: [], history: [], checklistTemplate: {} };
 let activeYard = 'Todos';
+let activeCategoryFilter = null;
 let activeMetricFilter = '';
 let weekOffset = 0;
 let deferredInstallPrompt = null;
@@ -35,6 +36,15 @@ function isPresentAt(vehicle, reference = new Date()) {
   return event ? Boolean(event.present) : !outsideStatuses.has(vehicle.status || 'No pátio');
 }
 function isPresent(vehicle) { return isPresentAt(vehicle, new Date()); }
+function isAttention(vehicle) {
+  return vehicle.status === 'Em manutenção' || vehicle.status === 'Sinistro' || /sinistro|bloqueado/i.test(`${vehicle.status} ${vehicle.notes}`);
+}
+function isReadyForUse(vehicle) {
+  if (!isPresent(vehicle)) return false;
+  if (vehicle.ready === true || vehicle.status === 'Pronto para uso') return true;
+  if (isAttention(vehicle) || vehicle.status === 'Aguardando operação') return false;
+  return Boolean(vehicle.available);
+}
 function presenceEventOn(vehicle, date = new Date()) { const key = localDateKey(date); return presenceEvents(vehicle).filter(event => event.date === key || localDateKey(event.at) === key).at(-1) || null; }
 function presenceStart(vehicle) {
   if (!isPresent(vehicle)) return null;
@@ -52,10 +62,97 @@ function presenceDurationMs(vehicle) {
 }
 function durationLabel(milliseconds) { const hours = Math.floor(milliseconds / 3600000); if (hours < 24) return `${hours}h`; const days = Math.floor(hours / 24); const remainingHours = hours % 24; return `${days}d${remainingHours ? ` ${remainingHours}h` : ''}`; }
 function yardDays(vehicle) { return Math.floor(presenceDurationMs(vehicle) / 86400000); }
-function statusTone(status) { if (outsideStatuses.has(status)) return 'outside'; if (status === 'Em manutenção' || status === 'Sinistro') return 'attention'; if (status === 'Aguardando operação') return 'waiting'; return 'present'; }
+function statusTone(status) {
+  if (status === 'Pronto para uso') return 'ready';
+  if (outsideStatuses.has(status)) return 'outside';
+  if (status === 'Em manutenção' || status === 'Sinistro') return 'attention';
+  if (status === 'Aguardando operação') return 'waiting';
+  return 'present';
+}
 function vehicleEvents(vehicle) { return state.history.filter(event => event.vehicleId === vehicle.id || (!event.vehicleId && event.plate === vehicle.plate)); }
 function lastEvent(vehicle) { return vehicleEvents(vehicle).sort((a, b) => new Date(b.at) - new Date(a.at))[0]; }
 function eventsOn(date, vehicle = null) { const key = localDateKey(date); return state.history.filter(event => localDateKey(event.at) === key && (!vehicle || event.vehicleId === vehicle.id || event.plate === vehicle.plate)); }
+
+function normalizeYardName(yard) {
+  return yard === 'Jaraguá' ? 'Pátio Central' : (yard || '');
+}
+function matchesYard(vehicleYard, targetYard) {
+  if (targetYard === 'Todos') return true;
+  const norm = normalizeYardName(vehicleYard);
+  return norm === targetYard;
+}
+
+function matchesCategoryFilter(vehicle, filter) {
+  if (!filter) return true;
+  const type = String(vehicle.type || '').trim().toLowerCase();
+  const color = String(vehicle.color || '').trim().toLowerCase();
+  const operation = String(vehicle.operation || 'Diversos').trim().toLowerCase();
+  const fullText = [vehicle.type, vehicle.model, vehicle.operation, vehicle.color, vehicle.notes, vehicle.linkedPlates, vehicle.brand].join(' ').toLowerCase();
+
+  if (filter.key) {
+    switch (filter.key) {
+      case 'toco':
+        return type === 'caminhão toco' || type === 'toco';
+      case 'truck':
+        return type === 'caminhão truck' || type === 'truck';
+      case 'vuc':
+        return type === 'vuc / 3/4' || type === '3/4' || type === 'vuc';
+      case 'cavalo':
+        return type === 'cavalo';
+      case 'carreta_prata':
+        if (type === 'carreta diversos prata') return true;
+        if (type === 'carreta' && operation !== 'correios') {
+          if (color) return /prata|cinza|alum/i.test(color);
+          return !/amarel|branc|correios/i.test(fullText);
+        }
+        return false;
+      case 'carreta_amarela':
+        return type === 'carreta diversos amarela' || (type === 'carreta' && (/amarel/i.test(color) || /amarel/i.test(fullText)));
+      case 'carreta_branca':
+        return type === 'carreta diversos branca' || (type === 'carreta' && (/branc/i.test(color) || /branc/i.test(fullText)));
+      case 'rodotrem':
+        return type === 'rodotrem' || type === 'dolly';
+      case 'carreta_correios':
+        return type === 'carreta correios' || (type === 'carreta' && (operation === 'correios' || /correios/i.test(fullText)));
+      case 'conjunto_diversos':
+        if (type === 'conjunto diversos') return true;
+        return Boolean(vehicle.linkedPlates && vehicle.linkedPlates.trim()) && operation !== 'correios' && !/correios/i.test(fullText);
+      case 'conjunto_correios':
+        if (type === 'conjunto correios') return true;
+        return Boolean(vehicle.linkedPlates && vehicle.linkedPlates.trim()) && (operation === 'correios' || /correios/i.test(fullText));
+      default:
+        break;
+    }
+  }
+
+  if (filter.group === 'caminhoes') {
+    return ['caminhão toco', 'toco', 'caminhão truck', 'truck', 'vuc / 3/4', '3/4', 'cavalo', 'van', 'veículo visitante', 'veículo diretoria'].includes(type);
+  }
+  if (filter.group === 'carretas') {
+    return ['carreta', 'carreta diversos prata', 'carreta diversos amarela', 'carreta diversos branca', 'carreta correios', 'rodotrem', 'semirreboque', 'dolly'].includes(type);
+  }
+  if (filter.group === 'conjuntos') {
+    return ['conjunto diversos', 'conjunto correios'].includes(type) || Boolean(vehicle.linkedPlates && vehicle.linkedPlates.trim());
+  }
+  return true;
+}
+
+function scopedVehicles() {
+  return state.vehicles.filter(vehicle => matchesCategoryFilter(vehicle, activeCategoryFilter));
+}
+
+function switchView(viewName) {
+  document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item.dataset.view === viewName));
+  $('#homeView').classList.toggle('hidden', viewName !== 'home');
+  $('#dailyView').classList.toggle('hidden', viewName !== 'daily');
+  $('#weeklyView').classList.toggle('hidden', viewName !== 'weekly');
+  if (viewName === 'weekly') renderWeekly();
+  if (viewName === 'daily') {
+    renderDailyMetrics();
+    renderYards();
+    renderVehicles();
+  }
+}
 
 function loginScreen() { $('#loginView').classList.remove('hidden'); $('#appView').classList.add('hidden'); }
 async function enter(user) {
@@ -67,7 +164,13 @@ async function enter(user) {
   $('#appView').classList.remove('hidden');
   await load();
 }
-async function load() { Object.assign(state, await request('/api/state')); renderAll(); }
+async function load() {
+  const data = await request('/api/state');
+  data.vehicles = (data.vehicles || []).map(v => ({ ...v, yard: normalizeYardName(v.yard) }));
+  data.history = (data.history || []).map(h => ({ ...h, yard: normalizeYardName(h.yard) }));
+  Object.assign(state, data);
+  renderAll();
+}
 
 function renderAll() {
   $('#todayLabel').textContent = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
@@ -79,26 +182,47 @@ function renderAll() {
 
 function renderDailyMetrics() {
   const today = localDateKey();
-  const present = state.vehicles.filter(isPresent);
-  const checked = state.vehicles.filter(vehicle => presenceEventOn(vehicle)).length;
-  const pendingChecks = state.vehicles.length - checked;
-  const movements = state.history.filter(event => localDateKey(event.at) === today && /Movimenta|Pátio alterado|cadastrado/i.test(event.action)).length;
-  const attention = present.filter(vehicle => vehicle.status === 'Em manutenção' || /sinistro|bloqueado/i.test(`${vehicle.status} ${vehicle.notes}`)).length;
+  const baseVehicles = scopedVehicles().filter(vehicle => matchesYard(vehicle.yard, activeYard));
+  const baseIds = new Set(baseVehicles.map(v => v.id));
+  const basePlates = new Set(baseVehicles.map(v => v.plate));
+  const present = baseVehicles.filter(isPresent);
+  const ready = baseVehicles.filter(isReadyForUse);
+  const checked = baseVehicles.filter(vehicle => presenceEventOn(vehicle)).length;
+  const pendingChecks = baseVehicles.length - checked;
+  const movements = state.history.filter(event => localDateKey(event.at) === today && (baseIds.has(event.vehicleId) || basePlates.has(event.plate)) && /Movimenta|Pátio alterado|cadastrado/i.test(event.action)).length;
+  const attention = present.filter(isAttention).length;
   const cards = [
-    { filter: 'present', value: present.length, label: 'No pátio agora', detail: `${state.vehicles.length - present.length} fora / em rota`, tone: 'blue', icon: 'P' },
-    { filter: 'checked', value: checked, label: 'Conferidos hoje', detail: `${state.vehicles.length ? Math.round(checked / state.vehicles.length * 100) : 0}% dos veículos`, tone: 'green', icon: '✓' },
+    { filter: 'present', value: present.length, label: 'No pátio agora', detail: `${baseVehicles.length - present.length} fora / em rota`, tone: 'blue', icon: 'P' },
+    { filter: 'ready', value: ready.length, label: 'Pronto para uso', detail: 'Disponíveis para operação', tone: 'emerald', icon: '✓' },
+    { filter: 'checked', value: checked, label: 'Conferidos hoje', detail: `${baseVehicles.length ? Math.round(checked / baseVehicles.length * 100) : 0}% dos veículos`, tone: 'green', icon: '✓' },
     { filter: 'pending', value: pendingChecks, label: 'Faltam conferir', detail: 'Sem OK ou Não OK hoje', tone: pendingChecks ? 'red' : 'green', icon: pendingChecks ? '!' : '✓' },
     { filter: 'movements', value: movements, label: 'Movimentações hoje', detail: 'Pátio, vaga ou status', tone: 'cyan', icon: 'M' },
-    { filter: 'attention', value: attention, label: 'Exigem atenção', detail: 'Manutenção ou bloqueio', tone: 'amber', icon: 'A' }
+    { filter: 'attention', value: attention, label: 'Exigem atenção', detail: 'Manutenção ou sinistro', tone: 'amber', icon: 'A' }
   ];
-  $('#dailyMetrics').innerHTML = cards.map(card => `<article class="summary-card ${activeMetricFilter === card.filter ? 'active' : ''}" data-metric-filter="${card.filter}" role="button" tabindex="0" title="Filtrar por ${card.label}"><span class="summary-icon ${card.tone}">${card.icon}</span><div><b>${card.value}</b><strong>${card.label}</strong><small>${card.detail}</small></div></article>`).join('');
+  $('#dailyMetrics').innerHTML = cards.map(card => `<article class="summary-card ${activeMetricFilter === card.filter ? 'active' : ''}" data-metric-filter="${card.filter}" role="button" tabindex="0" title="Filtrar por ${card.label}"><span class="summary-icon ${card.tone}">${card.icon}</span><div><b>${card.value}</b><strong>${card.label}</strong><small>${card.detail}</small></div>${activeMetricFilter === card.filter ? '<em class="summary-active-badge">FILTRO</em>' : ''}</article>`).join('');
 }
 
 function renderYards() {
+  const baseVehicles = scopedVehicles();
   $('#yardTabs').innerHTML = yards.map(yard => {
-    const count = yard === 'Todos' ? state.vehicles.filter(isPresent).length : state.vehicles.filter(vehicle => isPresent(vehicle) && vehicle.yard === yard).length;
+    const count = baseVehicles.filter(vehicle => isPresent(vehicle) && matchesYard(vehicle.yard, yard)).length;
     return `<button class="${activeYard === yard ? 'active' : ''}" data-yard="${yard}">${yard}<span>${count}</span></button>`;
   }).join('');
+}
+
+function updateCategoryBanner() {
+  const clearBtn = $('#clearCategoryFilter');
+  const titleEl = $('#dailyTitle');
+  const subtitleEl = $('#panelSubtitle');
+  if (activeCategoryFilter) {
+    clearBtn.classList.remove('hidden');
+    titleEl.textContent = activeCategoryFilter.label || 'Movimentação de hoje';
+    subtitleEl.textContent = `Veículos · ${activeCategoryFilter.label}${activeYard !== 'Todos' ? ` (${activeYard})` : ''}`;
+  } else {
+    clearBtn.classList.add('hidden');
+    titleEl.textContent = 'Movimentação de hoje';
+    subtitleEl.textContent = 'Veículos nos pátios';
+  }
 }
 
 function filteredVehicles() {
@@ -107,33 +231,41 @@ function filteredVehicles() {
   const operation = $('#operationFilter').value;
   const checklist = $('#checklistFilter').value;
   const today = localDateKey();
-  return state.vehicles.filter(vehicle => {
-    const yardMatches = activeYard === 'Todos' || vehicle.yard === activeYard;
-    const statusMatches = status === 'all' || (status === 'ready' ? vehicle.ready === true : status === 'Em rota' ? outsideStatuses.has(vehicle.status) : vehicle.status === status);
+  return scopedVehicles().filter(vehicle => {
+    const yardMatches = matchesYard(vehicle.yard, activeYard);
+    const statusMatches = status === 'all' || (status === 'ready' ? isReadyForUse(vehicle) : status === 'Em rota' ? outsideStatuses.has(vehicle.status) : vehicle.status === status);
     const operationMatches = operation === 'all' || (vehicle.operation || 'Diversos') === operation;
     const checklistMatches = checklist === 'all' || (checklist === 'ok' ? vehicle.available : !vehicle.available);
-    const metricMatches = !activeMetricFilter || (activeMetricFilter === 'present' && isPresent(vehicle)) || (activeMetricFilter === 'checked' && Boolean(presenceEventOn(vehicle))) || (activeMetricFilter === 'pending' && !presenceEventOn(vehicle)) || (activeMetricFilter === 'movements' && vehicleEvents(vehicle).some(event => localDateKey(event.at) === today && /Movimenta|Pátio alterado|cadastrado/i.test(event.action))) || (activeMetricFilter === 'attention' && (vehicle.status === 'Em manutenção' || /sinistro|bloqueado/i.test(`${vehicle.status} ${vehicle.notes}`)));
-    const text = [vehicle.plate, vehicle.fleet, vehicle.type, vehicle.position, vehicle.linkedPlates, vehicle.yard].join(' ').toLowerCase();
+    const metricMatches = !activeMetricFilter ||
+      (activeMetricFilter === 'present' && isPresent(vehicle)) ||
+      (activeMetricFilter === 'ready' && isReadyForUse(vehicle)) ||
+      (activeMetricFilter === 'checked' && Boolean(presenceEventOn(vehicle))) ||
+      (activeMetricFilter === 'pending' && !presenceEventOn(vehicle)) ||
+      (activeMetricFilter === 'movements' && vehicleEvents(vehicle).some(event => localDateKey(event.at) === today && /Movimenta|Pátio alterado|cadastrado/i.test(event.action))) ||
+      (activeMetricFilter === 'attention' && isAttention(vehicle));
+    const text = [vehicle.plate, vehicle.fleet, vehicle.type, vehicle.position, vehicle.linkedPlates, vehicle.yard, vehicle.color, vehicle.operation, vehicle.notes].join(' ').toLowerCase();
     return yardMatches && statusMatches && operationMatches && checklistMatches && metricMatches && text.includes(query);
   }).sort((a, b) => Number(isPresent(b)) - Number(isPresent(a)) || String(a.yard).localeCompare(String(b.yard), 'pt-BR') || String(a.plate).localeCompare(String(b.plate), 'pt-BR'));
 }
 
 function plateHtml(vehicle) { return `<span class="plate ${vehicle.plateType || ''}">${esc(vehicle.plate)}</span>`; }
 function renderVehicles() {
+  updateCategoryBanner();
   const vehicles = filteredVehicles();
   $('#resultCount').textContent = `${vehicles.length} veículo${vehicles.length === 1 ? '' : 's'}`;
   if (!vehicles.length) {
-    $('#vehicleTable').innerHTML = '<div class="empty"><b>Nenhum veículo encontrado</b><span>Altere os filtros ou registre uma nova entrada.</span></div>';
+    $('#vehicleTable').innerHTML = '<div class="empty"><b>Nenhum veículo encontrado nesta categoria/filtro</b><span>Altere os filtros ou clique em “＋ Registrar veículo” para adicionar.</span></div>';
     return;
   }
   const rows = vehicles.map(vehicle => {
     const event = lastEvent(vehicle);
     const duration = durationLabel(presenceDurationMs(vehicle));
     const todayPresence = presenceEventOn(vehicle);
+    const displayStatus = vehicle.ready && vehicle.status === 'No pátio' ? 'Pronto para uso' : (vehicle.status || 'No pátio');
     return `<div class="vehicle-row ${isPresent(vehicle) ? '' : 'is-outside'}" data-id="${vehicle.id}" role="button" tabindex="0">
       <span class="vehicle-cell identity">${plateHtml(vehicle)}<span><b>${esc(vehicle.type || 'Veículo')}</b><small>${esc(vehicle.operation || 'Diversos')}${vehicle.operation === 'Diversos' && vehicle.color ? ` · ${esc(vehicle.color)}` : ''}</small></span></span>
       <span class="vehicle-cell"><small>Pátio</small><b>${esc(vehicle.yard || 'Não informado')}</b><em>${esc(vehicle.linkedPlates || 'Sem conjunto vinculado')}</em></span>
-      <span class="vehicle-cell"><small>Status</small><i class="status-pill ${statusTone(vehicle.status)}">${esc(vehicle.status || 'No pátio')}</i></span>
+      <span class="vehicle-cell"><small>Status</small><i class="status-pill ${statusTone(displayStatus)}">${esc(displayStatus)}</i></span>
       <span class="vehicle-cell permanence"><small>${isPresent(vehicle) ? 'Permanência atual' : 'Última permanência'}</small><b>${duration}</b><em>${isPresent(vehicle) ? `Desde ${formatDateTime(presenceStart(vehicle))}` : `Saída ${formatDateTime(vehicle.presenceEndedAt || latestPresenceEvent(vehicle)?.at)}`}</em></span>
       <span class="vehicle-cell daily-check-cell"><small>Presença hoje</small><span class="presence-actions"><button type="button" class="presence-button yes ${todayPresence?.present === true ? 'active' : ''}" data-presence-id="${vehicle.id}" data-present="true">OK</button><button type="button" class="presence-button no ${todayPresence?.present === false ? 'active' : ''}" data-presence-id="${vehicle.id}" data-present="false">Não OK</button></span><em>${todayPresence ? `${todayPresence.present ? 'No pátio' : 'Fora'} · ${formatDateTime(todayPresence.at)}` : 'Aguardando conferência'}</em></span>
       <span class="vehicle-cell last-update"><small>Última movimentação</small><b>${event ? esc(event.action) : 'Sem movimentação'}</b><em>${event ? formatDateTime(event.at) : formatDateTime(vehicle.updatedAt)}</em></span>
@@ -156,18 +288,21 @@ function snapshotForDay(vehicle, date) {
   const end = new Date(date); end.setHours(23, 59, 59, 999);
   if (entered && entered > end) return null;
   const snapshot = vehicleEvents(vehicle).filter(event => new Date(event.at) <= end && (event.yard || event.status || event.position)).sort((a, b) => new Date(b.at) - new Date(a.at))[0];
-  return snapshot ? { ...vehicle, yard: snapshot.yard || vehicle.yard, status: snapshot.status || vehicle.status, position: snapshot.position || vehicle.position } : vehicle;
+  return snapshot ? { ...vehicle, yard: normalizeYardName(snapshot.yard || vehicle.yard), status: snapshot.status || vehicle.status, position: snapshot.position || vehicle.position } : vehicle;
 }
 
 function renderWeekly() {
   const days = weekDays();
   const lastDay = days.at(-1);
+  const baseVehicles = scopedVehicles();
+  const baseIds = new Set(baseVehicles.map(v => v.id));
+  const basePlates = new Set(baseVehicles.map(v => v.plate));
   $('#weekLabel').textContent = `${formatDate(days[0], { day: '2-digit', month: 'long' })} a ${formatDate(lastDay, { day: '2-digit', month: 'long', year: 'numeric' })}`;
-  const weekEvents = state.history.filter(event => { const at = new Date(event.at); const end = new Date(lastDay); end.setHours(23, 59, 59, 999); return at >= days[0] && at <= end; });
-  const entries = state.vehicles.filter(vehicle => { const entered = parseDate(vehicle.enteredAt); return entered && entered >= days[0] && entered <= new Date(lastDay.getTime() + 86399999); }).length;
+  const weekEvents = state.history.filter(event => { const at = new Date(event.at); const end = new Date(lastDay); end.setHours(23, 59, 59, 999); return at >= days[0] && at <= end && (baseIds.has(event.vehicleId) || basePlates.has(event.plate)); });
+  const entries = baseVehicles.filter(vehicle => { const entered = parseDate(vehicle.enteredAt); return entered && entered >= days[0] && entered <= new Date(lastDay.getTime() + 86399999); }).length;
   const movedVehicles = new Set(weekEvents.filter(event => /Movimenta|Pátio alterado/i.test(event.action)).map(event => event.vehicleId || event.plate)).size;
-  const peak = Math.max(0, ...days.map(day => state.vehicles.filter(vehicle => snapshotForDay(vehicle, day) && isPresentAt(vehicle, day)).length));
-  const longStay = state.vehicles.filter(vehicle => isPresent(vehicle) && yardDays(vehicle) >= 7).length;
+  const peak = Math.max(0, ...days.map(day => baseVehicles.filter(vehicle => snapshotForDay(vehicle, day) && isPresentAt(vehicle, day)).length));
+  const longStay = baseVehicles.filter(vehicle => isPresent(vehicle) && yardDays(vehicle) >= 7).length;
   const cards = [
     { value: peak, label: 'Pico de ocupação', detail: 'Maior total diário', tone: 'blue', icon: 'P' },
     { value: entries, label: 'Entradas na semana', detail: 'Veículos recebidos', tone: 'green', icon: 'E' },
@@ -175,13 +310,13 @@ function renderWeekly() {
     { value: longStay, label: 'Há 7 dias ou mais', detail: 'Permanência prolongada', tone: 'amber', icon: '7' }
   ];
   $('#weeklyMetrics').innerHTML = cards.map(card => `<article class="summary-card"><span class="summary-icon ${card.tone}">${card.icon}</span><div><b>${card.value}</b><strong>${card.label}</strong><small>${card.detail}</small></div></article>`).join('');
-  renderOccupancy(days);
+  renderOccupancy(days, baseVehicles);
   renderMovementSummary(weekEvents);
-  renderWeeklyTable(days);
+  renderWeeklyTable(days, baseVehicles);
 }
 
-function renderOccupancy(days) {
-  const values = days.map(day => state.vehicles.filter(vehicle => snapshotForDay(vehicle, day) && isPresentAt(vehicle, day)).length);
+function renderOccupancy(days, baseVehicles = scopedVehicles()) {
+  const values = days.map(day => baseVehicles.filter(vehicle => snapshotForDay(vehicle, day) && isPresentAt(vehicle, day)).length);
   const max = Math.max(1, ...values);
   $('#occupancyChart').innerHTML = days.map((day, index) => `<div class="bar-column"><b>${values[index]}</b><div class="bar-track"><i style="height:${Math.max(8, values[index] / max * 100)}%"></i></div><span>${day.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '')}</span><small>${day.getDate()}</small></div>`).join('');
 }
@@ -191,12 +326,12 @@ function renderMovementSummary(events) {
   $('#movementSummary').innerHTML = movements.length ? movements.slice(0, 7).map(event => `<div class="movement-item"><span class="movement-dot"></span><div><b>${esc(event.plate)} · ${esc(event.action)}</b><small>${esc(event.detail || event.yard || 'Registro operacional')} · ${formatDateTime(event.at)}</small></div></div>`).join('') : '<div class="empty compact-empty"><b>Sem movimentações nesta semana</b><span>As alterações de pátio, posição e status aparecerão aqui.</span></div>';
 }
 
-function renderWeeklyTable(days) {
+function renderWeeklyTable(days, baseVehicles = scopedVehicles()) {
   const select = $('#weeklyVehicleFilter');
   const selected = select.value || 'all';
-  select.innerHTML = '<option value="all">Todos</option>' + [...state.vehicles].sort((a, b) => String(a.plate).localeCompare(String(b.plate))).map(vehicle => `<option value="${vehicle.id}">${esc(vehicle.plate)}</option>`).join('');
-  select.value = state.vehicles.some(vehicle => vehicle.id === selected) ? selected : 'all';
-  const vehicles = state.vehicles.filter(vehicle => select.value === 'all' || vehicle.id === select.value).sort((a, b) => String(a.plate).localeCompare(String(b.plate), 'pt-BR'));
+  select.innerHTML = '<option value="all">Todos</option>' + [...baseVehicles].sort((a, b) => String(a.plate).localeCompare(String(b.plate))).map(vehicle => `<option value="${vehicle.id}">${esc(vehicle.plate)}</option>`).join('');
+  select.value = baseVehicles.some(vehicle => vehicle.id === selected) ? selected : 'all';
+  const vehicles = baseVehicles.filter(vehicle => select.value === 'all' || vehicle.id === select.value).sort((a, b) => String(a.plate).localeCompare(String(b.plate), 'pt-BR'));
   const header = days.map(day => `<span><b>${day.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '')}</b><small>${day.getDate()}</small></span>`).join('');
   const rows = vehicles.map(vehicle => `<div class="week-row" data-timeline-id="${vehicle.id}" role="button" tabindex="0" title="Abrir timeline de ${esc(vehicle.plate)}"><div class="week-vehicle">${plateHtml(vehicle)}<small>${esc(vehicle.type || '')} · Ver timeline</small></div>${days.map(day => {
     const snapshot = snapshotForDay(vehicle, day);
@@ -230,8 +365,8 @@ function openVehicleTimeline(id) {
   $('#timelineTitle').textContent = `Timeline · ${vehicle.plate}`;
   $('#timelineSubtitle').textContent = `${vehicle.type || 'Veículo'} · ${vehicle.yard || 'Pátio não informado'} · ${vehicle.position || 'Sem posição'}`;
   $('#timelineStats').innerHTML = `<article><small>Situação atual</small><b class="${isPresent(vehicle) ? 'text-present' : 'text-outside'}">${isPresent(vehicle) ? 'No pátio' : 'Fora do pátio'}</b></article><article><small>Entradas registradas</small><b>${Math.max(1, periods.length)}</b></article><article><small>Tempo total no pátio</small><b>${durationLabel(totalMs)}</b></article><article><small>Última marcação</small><b>${marks.length ? formatDateTime(marks.at(-1).at) : 'Sem marcação'}</b></article>`;
-  const presenceItems = marks.map(mark => ({ at: mark.at, tone: mark.present ? 'entry' : 'exit', title: mark.present ? 'OK · Entrada/presença confirmada' : 'Não OK · Saída confirmada', detail: `${mark.yard || vehicle.yard || 'Pátio não informado'}${mark.position ? ` · ${mark.position}` : ''}`, user: mark.user }));
-  const historyItems = vehicleEvents(vehicle).filter(event => !/Presença confirmada|Saída confirmada|Conferência diária OK/i.test(event.action)).map(event => ({ at: event.at, tone: /excluído/i.test(event.action) ? 'exit' : /cadastrado/i.test(event.action) ? 'entry' : 'movement', title: event.action, detail: event.detail || [event.yard, event.position, event.status].filter(Boolean).join(' · '), user: event.user }));
+  const presenceItems = marks.map(mark => ({ at: mark.at, tone: mark.present ? 'entry' : 'exit', title: mark.present ? 'OK · Entrada/presença confirmada' : 'Não OK · Saída confirmada', detail: `${ normalizeYardName(mark.yard || vehicle.yard) || 'Pátio não informado'}${mark.position ? ` · ${mark.position}` : ''}`, user: mark.user }));
+  const historyItems = vehicleEvents(vehicle).filter(event => !/Presença confirmada|Saída confirmada|Conferência diária OK/i.test(event.action)).map(event => ({ at: event.at, tone: /excluído/i.test(event.action) ? 'exit' : /cadastrado/i.test(event.action) ? 'entry' : 'movement', title: event.action, detail: event.detail || [normalizeYardName(event.yard), event.position, event.status].filter(Boolean).join(' · '), user: event.user }));
   const items = [...presenceItems, ...historyItems].sort((a, b) => new Date(b.at) - new Date(a.at));
   $('#timelineList').innerHTML = items.length ? items.map(item => `<article class="timeline-item ${item.tone}"><div class="timeline-rail"><i></i></div><div><time>${formatDateTime(item.at)}</time><h3>${esc(item.title)}</h3><p>${esc(item.detail || 'Sem detalhes adicionais')}</p><small>${esc(item.user || 'Sistema')}</small></div></article>`).join('') : '<div class="empty"><b>Sem eventos para este veículo</b><span>As próximas marcações formarão a timeline.</span></div>';
   $('#timelineDialog').showModal();
@@ -246,9 +381,17 @@ function openVehicle(id = '') {
   $('#dialogTitle').textContent = vehicle ? `Atualizar ${vehicle.plate}` : 'Registrar veículo no pátio';
   $('#plate').disabled = Boolean(vehicle);
   const fields = ['plate', 'brand', 'type', 'model', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'color', 'stage', 'status', 'yard', 'linkedPlates', 'notes'];
-  fields.forEach(key => { if (vehicle) $(`#${key}`).value = vehicle[key] || ''; });
-  $('#ready').checked = vehicle?.ready === true;
-  if (!vehicle) { $('#enteredAt').value = localDateKey(); $('#status').value = 'No pátio'; $('#stage').value = 'Controle de pátio'; }
+  fields.forEach(key => { if (vehicle && $(`#${key}`)) $(`#${key}`).value = key === 'yard' ? normalizeYardName(vehicle[key]) : (vehicle[key] || ''); });
+  $('#ready').checked = vehicle?.ready === true || vehicle?.status === 'Pronto para uso';
+  if (!vehicle) {
+    $('#enteredAt').value = localDateKey();
+    $('#status').value = 'No pátio';
+    $('#stage').value = 'Controle de pátio';
+    if (activeCategoryFilter?.defaultType) $('#type').value = activeCategoryFilter.defaultType;
+    if (activeCategoryFilter?.defaultOperation) $('#operation').value = activeCategoryFilter.defaultOperation;
+    if (activeCategoryFilter?.defaultColor) $('#color').value = activeCategoryFilter.defaultColor;
+    if (activeYard && activeYard !== 'Todos') $('#yard').value = activeYard;
+  }
   renderChecklistFields(vehicle);
   renderPhotoPreview(vehicle?.photos || []);
   renderIncidentPhotoPreview(vehicle?.incidentPhotos || []);
@@ -275,15 +418,67 @@ function renderPhotoPreview(photos) { renderPhotoCards('#photoPreview', photos, 
 function renderIncidentPhotoPreview(photos) { renderPhotoCards('#incidentPhotoPreview', photos, 'incidentPhotos', 'Nenhuma foto de sinistro anexada.'); }
 
 function renderHistory() {
-  $('#historyList').innerHTML = state.history.length ? state.history.map(event => `<div class="history-item"><time>${formatDateTime(event.at)}</time><span class="history-marker"></span><div><b>${esc(event.action)} · ${esc(event.plate)}</b><span>${esc(event.detail || [event.yard, event.position, event.status].filter(Boolean).join(' · ') || 'Sem detalhes')}</span><small>${esc(event.user)}</small></div></div>`).join('') : '<div class="empty"><b>Nenhum evento registrado</b></div>';
+  $('#historyList').innerHTML = state.history.length ? state.history.map(event => `<div class="history-item"><time>${formatDateTime(event.at)}</time><span class="history-marker"></span><div><b>${esc(event.action)} · ${esc(event.plate)}</b><span>${esc(event.detail || [normalizeYardName(event.yard), event.position, event.status].filter(Boolean).join(' · ') || 'Sem detalhes')}</span><small>${esc(event.user)}</small></div></div>`).join('') : '<div class="empty"><b>Nenhum evento registrado</b></div>';
 }
 
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
-  document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === button));
-  $('#dailyView').classList.toggle('hidden', button.dataset.view !== 'daily');
-  $('#weeklyView').classList.toggle('hidden', button.dataset.view !== 'weekly');
-  if (button.dataset.view === 'weekly') renderWeekly();
+  switchView(button.dataset.view);
 }));
+
+$('#backToHome').onclick = () => switchView('home');
+$('#clearCategoryFilter').onclick = () => {
+  activeCategoryFilter = null;
+  activeYard = 'Todos';
+  activeMetricFilter = '';
+  $('#search').value = '';
+  $('#statusFilter').value = 'all';
+  $('#operationFilter').value = 'all';
+  $('#checklistFilter').value = 'all';
+  renderDailyMetrics();
+  renderYards();
+  renderVehicles();
+};
+
+$('#homeView').addEventListener('click', event => {
+  const yardBtn = event.target.closest('[data-group-yard]');
+  if (yardBtn) {
+    const groupSection = yardBtn.closest('[data-group]');
+    const group = groupSection?.dataset.group || '';
+    const groupTitles = { caminhoes: 'Caminhões', carretas: 'Carretas', conjuntos: 'Conjuntos' };
+    const defaultTypes = { caminhoes: 'Caminhão Toco', carretas: 'Carreta', conjuntos: 'Conjunto Diversos' };
+    activeYard = yardBtn.dataset.groupYard;
+    activeMetricFilter = '';
+    activeCategoryFilter = { group, label: `${groupTitles[group] || 'Frota'} · ${activeYard}`, defaultType: defaultTypes[group] };
+    switchView('daily');
+    return;
+  }
+
+  const card = event.target.closest('.fleet-card');
+  if (card) {
+    const groupSection = card.closest('[data-group]');
+    const group = groupSection?.dataset.group || '';
+    const label = card.dataset.category || '';
+    const key = card.dataset.key || '';
+    const defaultType = card.dataset.defaultType || '';
+    const defaultOperation = card.dataset.defaultOperation || '';
+    const defaultColor = card.dataset.defaultColor || '';
+    activeYard = 'Todos';
+    activeMetricFilter = '';
+    activeCategoryFilter = { group, key, label, defaultType, defaultOperation, defaultColor };
+    switchView('daily');
+  }
+});
+
+$('#homeView').addEventListener('keydown', event => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    const card = event.target.closest('.fleet-card');
+    if (card) {
+      event.preventDefault();
+      card.click();
+    }
+  }
+});
+
 function compressImage(file, maxSize = 960, quality = .58) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = reject; reader.onload = () => { const image = new Image(); image.onload = () => { const scale = Math.min(1, maxSize / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale)); canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height); resolve(canvas.toDataURL('image/jpeg', quality)); }; image.onerror = reject; image.src = reader.result; }; reader.readAsDataURL(file); }); }
 async function loadPhotoFiles(input, preview, targetId) { const files = [...(input.files || [])].slice(0, 8); try { const incoming = await Promise.all(files.map(async (file, index) => ({ src: await compressImage(file), label: file.name.replace(/\.[^.]+$/, '') || `Foto ${index + 1}` }))); const target = $(`#${targetId}`); const existing = JSON.parse(target.dataset.loaded || '[]'); const photos = [...existing, ...incoming].slice(0, 8); preview(photos); target.dataset.loaded = JSON.stringify(photos); input.value = ''; } catch { toast('Não foi possível processar uma das imagens.'); } }
 $('#photos').addEventListener('change', event => loadPhotoFiles(event.target, renderPhotoPreview, 'photos'));
@@ -301,7 +496,7 @@ $('#logout').onclick = async () => { await request('/api/logout', { method: 'POS
 $('#newVehicle').onclick = () => openVehicle();
 $('#dailyMetrics').onclick = event => { const card = event.target.closest('[data-metric-filter]'); if (!card) return; activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };
 $('#dailyMetrics').onkeydown = event => { if (event.key !== 'Enter' && event.key !== ' ') return; const card = event.target.closest('[data-metric-filter]'); if (!card) return; event.preventDefault(); activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };
-$('#yardTabs').onclick = event => { const button = event.target.closest('[data-yard]'); if (button) { activeYard = button.dataset.yard; renderYards(); renderVehicles(); } };
+$('#yardTabs').onclick = event => { const button = event.target.closest('[data-yard]'); if (button) { activeYard = button.dataset.yard; renderDailyMetrics(); renderYards(); renderVehicles(); } };
 $('#search').oninput = renderVehicles;
 $('#statusFilter').onchange = renderVehicles;
 $('#operationFilter').onchange = renderVehicles;
@@ -327,15 +522,15 @@ $('#nextWeek').onclick = () => { weekOffset += 1; renderWeekly(); };
 $('#weeklyVehicleFilter').onchange = () => renderWeeklyTable(weekDays());
 $('#weeklyTable').onclick = event => { const row = event.target.closest('[data-timeline-id]'); if (row) openVehicleTimeline(row.dataset.timelineId); };
 $('#weeklyTable').onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { const row = event.target.closest('[data-timeline-id]'); if (row) { event.preventDefault(); openVehicleTimeline(row.dataset.timelineId); } } };
-(() => { const scroller = $('.weekly-table'); let dragging = false; let startX = 0; let startScroll = 0; scroller.addEventListener('pointerdown', event => { dragging = true; startX = event.clientX; startScroll = scroller.scrollLeft; scroller.setPointerCapture(event.pointerId); }); scroller.addEventListener('pointermove', event => { if (dragging) scroller.scrollLeft = startScroll - (event.clientX - startX); }); scroller.addEventListener('pointerup', () => { dragging = false; }); scroller.addEventListener('pointercancel', () => { dragging = false; }); })();
+(() => { const scroller = $('.weekly-table'); if (!scroller) return; let dragging = false; let startX = 0; let startScroll = 0; scroller.addEventListener('pointerdown', event => { dragging = true; startX = event.clientX; startScroll = scroller.scrollLeft; scroller.setPointerCapture(event.pointerId); }); scroller.addEventListener('pointermove', event => { if (dragging) scroller.scrollLeft = startScroll - (event.clientX - startX); }); scroller.addEventListener('pointerup', () => { dragging = false; }); scroller.addEventListener('pointercancel', () => { dragging = false; }); })();
 document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => $('#vehicleDialog').close());
 $('#vehicleForm').addEventListener('submit', async event => {
   event.preventDefault();
   const id = $('#vehicleId').value;
   const fields = ['plate', 'brand', 'type', 'model', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'color', 'stage', 'status', 'yard', 'linkedPlates', 'notes'];
-  const payload = Object.fromEntries(fields.map(key => [key, $(`#${key}`).value]));
-  payload.ready = $('#ready').checked;
-  payload.checklist = Object.fromEntries(Object.entries(state.checklistTemplate).map(([area, labels]) => [area, labels.map(label => ({ label, status: $(`#check-${CSS.escape(label)}`)?.value || 'pendente', note: '' }))]));
+  const payload = Object.fromEntries(fields.map(key => [key, $(`#${key}`)?.value || '']));
+  payload.ready = $('#ready').checked || payload.status === 'Pronto para uso';
+  payload.checklist = Object.fromEntries(Object.entries(state.checklistTemplate).map(([area, labels]) => [area, labels.map(label => ({ label, status: $(`#${checklistId(label)}`)?.value || 'pendente', note: '' }))]));
   payload.photos = JSON.parse($('#photos').dataset.loaded || '[]');
   payload.incidentPhotos = JSON.parse($('#incidentPhotos').dataset.loaded || '[]');
   try { await request(id ? `/api/vehicles/${id}` : '/api/vehicles', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); $('#vehicleDialog').close(); await load(); toast(id ? 'Movimentação registrada.' : 'Veículo registrado no pátio.'); } catch (error) { toast(error.message); }
@@ -343,12 +538,10 @@ $('#vehicleForm').addEventListener('submit', async event => {
 $('#deleteVehicle').onclick = async () => { const id = $('#vehicleId').value; if (!id || !confirm('Excluir este veículo do controle? O histórico será preservado.')) return; try { await request(`/api/vehicles/${id}`, { method: 'DELETE' }); $('#vehicleDialog').close(); await load(); toast('Veículo excluído.'); } catch (error) { toast(error.message); } };
 function generatePdfReport() {
   const filter = $('#pdfChoice').value;
-  let vehicles = state.vehicles.filter(vehicle => filter === 'all' || (filter === 'ready' ? vehicle.ready === true : vehicle.status === filter || vehicle.operation === filter));
+  let vehicles = scopedVehicles().filter(vehicle => filter === 'all' || (filter === 'ready' ? isReadyForUse(vehicle) : vehicle.status === filter || vehicle.operation === filter));
   const labels = { all: 'Todas as carretas', ready: 'Carretas prontas', Diversos: 'Carretas Diversos', Correios: 'Carretas Correios', 'Em manutenção': 'Carretas em manutenção', Sinistro: 'Carretas com sinistro', 'Aguardando operação': 'Carretas aguardando operação' };
   const title = labels[filter] || 'Relatório de carretas';
-  const readyCount = vehicles.filter(vehicle => vehicle.ready).length;
-  const maintenanceCount = vehicles.filter(vehicle => vehicle.status === 'Em manutenção' || vehicle.status === 'Sinistro').length;
-  const cards = vehicles.map(vehicle => `<article class="vehicle-card"><span class="plate">${esc(vehicle.plate)}</span><span class="vehicle-type">${esc(vehicle.type || 'Carreta')}</span><span>${esc(vehicle.yard || 'Não informado')}</span><span>${esc(vehicle.operation || 'Diversos')}${vehicle.operation === 'Diversos' && vehicle.color ? ` · ${esc(vehicle.color)}` : ''}</span><span>${vehicle.available ? 'Checklist OK' : 'Checklist pendente'}</span><span class="state ${vehicle.ready ? 'ready' : 'waiting'}">${vehicle.ready ? 'PRONTA' : esc(vehicle.status || 'Em avaliação')}</span>${vehicle.notes ? `<small>${esc(vehicle.notes)}</small>` : ''}</article>`).join('');
+  const cards = vehicles.map(vehicle => `<article class="vehicle-card"><span class="plate">${esc(vehicle.plate)}</span><span class="vehicle-type">${esc(vehicle.type || 'Carreta')}</span><span>${esc(vehicle.yard || 'Não informado')}</span><span>${esc(vehicle.operation || 'Diversos')}${vehicle.operation === 'Diversos' && vehicle.color ? ` · ${esc(vehicle.color)}` : ''}</span><span>${vehicle.available ? 'Checklist OK' : 'Checklist pendente'}</span><span class="state ${isReadyForUse(vehicle) ? 'ready' : 'waiting'}">${isReadyForUse(vehicle) ? 'PRONTA' : esc(vehicle.status || 'Em avaliação')}</span>${vehicle.notes ? `<small>${esc(vehicle.notes)}</small>` : ''}</article>`).join('');
   const printWindow = window.open('', '_blank');
   if (!printWindow) { toast('Permita pop-ups para gerar o PDF.'); return; }
   printWindow.document.write(`<html><head><title>${title} · Pátio Print</title><style>@page{size:A4;margin:13mm}*{box-sizing:border-box}body{margin:0;background:#fff;color:#14253d;font-family:Arial,Helvetica,sans-serif}.report{max-width:860px;margin:0 auto;min-height:100vh;padding:24px 28px}.top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #0a86bd;padding-bottom:14px}.logo{width:130px;height:auto}.kicker{color:#0a91a7;font-size:10px;font-weight:bold;letter-spacing:1.6px;text-transform:uppercase;margin-top:4px}.title{font-size:23px;margin:6px 0 4px;color:#102d50}.sub{font-size:10px;color:#718096}.vehicle-card{display:grid;grid-template-columns:1.2fr .8fr 1fr 1.2fr 1.2fr auto;gap:8px;align-items:center;border-bottom:1px solid #dce5ee;padding:8px 4px;break-inside:avoid;font-size:10px;color:#30455e}.vehicle-card small{grid-column:1/-1;background:#fffaf0;border-left:3px solid #f0a32b;padding:4px 8px}.plate{font-size:13px;font-weight:800;color:#102d50;letter-spacing:.5px}.vehicle-type{font-size:9px;color:#718096}.state{border-radius:20px;padding:5px 7px;font-size:8px;font-weight:bold;letter-spacing:.3px;text-align:center}.state.ready{background:#dff6e9;color:#13784d}.state.waiting{background:#fff1d8;color:#98600b}.footer{border-top:1px solid #dce5ee;margin-top:18px;padding-top:10px;display:flex;justify-content:space-between;color:#8290a0;font-size:10px}.signature{font-weight:bold;color:#43617b}@media print{body{background:#fff}.report{padding:0;max-width:none}.print-action{display:none}}@media(max-width:600px){.report{padding:18px}.vehicle-card{grid-template-columns:1fr 1fr}}</style></head><body><main class="report"><header class="top"><div><div class="kicker">Controle operacional</div><h1>${title}</h1><div class="sub">Base Print · ${new Date().toLocaleDateString('pt-BR')} · ${vehicles.length} registro(s)</div></div><img class="logo" src="/images/logo-print.png" alt="Print"></header><section>${vehicles.length ? cards : '<article class="vehicle-card">Nenhum registro encontrado.</article>'}</section><footer class="footer"><span>Gerado pelo Controle de Pátios · ${vehicles.length} registro(s)</span><span class="signature">Sistema desenvolvido por Ramalho</span></footer><button class="print-action" onclick="window.print()" style="margin-top:16px;padding:10px 14px;border:0;border-radius:8px;background:#087db4;color:#fff;font-weight:bold">Imprimir / Salvar como PDF</button></main></body></html>`);

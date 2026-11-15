@@ -82,8 +82,12 @@ function vehiclePresenceEvents(vehicle) {
   if (Array.isArray(vehicle.presenceEvents)) return vehicle.presenceEvents;
   return (Array.isArray(vehicle.dailyChecks) ? vehicle.dailyChecks : []).map(check => ({ ...check, present: true }));
 }
+function normalizeYard(yard) {
+  const cleaned = clean(yard);
+  return cleaned === 'Jaraguá' ? 'Pátio Central' : cleaned;
+}
 function decorate(vehicle) {
-  const decorated = { ...vehicle, brand: vehicle.brand || 'Facchini', enteredAt: vehicle.enteredAt || vehicle.createdAt?.slice(0, 10), plateType: plateType(vehicle.plate), presenceEvents: vehiclePresenceEvents(vehicle), checklist: makeChecklist(vehicle.checklist) };
+  const decorated = { ...vehicle, yard: normalizeYard(vehicle.yard), brand: vehicle.brand || 'Facchini', enteredAt: vehicle.enteredAt || vehicle.createdAt?.slice(0, 10), plateType: plateType(vehicle.plate), presenceEvents: vehiclePresenceEvents(vehicle), checklist: makeChecklist(vehicle.checklist) };
   return { ...decorated, available: available(decorated) };
 }
 function audit(data, user, action, vehicle, detail = '') {
@@ -103,7 +107,7 @@ function serve(req, res) {
   fs.readFile(target, (err, data) => {
     if (err) return json(res, 404, { error: 'Arquivo não encontrado.' });
     const ext = path.extname(target);
-    const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/manifest+json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
+    const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/manifest+json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.png': 'image/png', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml' };
     res.writeHead(200, { 'Content-Type': types[ext] || 'application/octet-stream' }); res.end(data);
   });
 }
@@ -140,7 +144,7 @@ async function api(req, res, url) {
     if (data.vehicles.some(v => v.plate === p)) return json(res, 409, { error: 'Esta placa já está cadastrada.' });
     const createdAt = new Date().toISOString();
     const operation = ['Correios', 'Diversos'].includes(clean(input.operation)) ? clean(input.operation) : 'Diversos';
-    const vehicle = { id: crypto.randomUUID(), plate: p, plateType: plateType(p), type: clean(input.type), brand: clean(input.brand), model: clean(input.model), chassis: clean(input.chassis), renavam: clean(input.renavam), nf: clean(input.nf), operation, color: operation === 'Diversos' ? clean(input.color) : '', ready: input.ready === true || input.ready === 'true', stage: clean(input.stage) || 'Processos', status: clean(input.status) || 'Aguardando linha', yard: clean(input.yard), linkedPlates: clean(input.linkedPlates, 100).toUpperCase(), notes: clean(input.notes, 500), enteredAt: input.enteredAt || todayInSaoPaulo(), presenceEvents: [], presenceStartedAt: createdAt, checklist: makeChecklist(input.checklist), photos: Array.isArray(input.photos) ? input.photos.slice(0, 8) : [], incidentPhotos: Array.isArray(input.incidentPhotos) ? input.incidentPhotos.slice(0, 8) : [], createdAt, updatedAt: createdAt };
+    const vehicle = { id: crypto.randomUUID(), plate: p, plateType: plateType(p), type: clean(input.type), brand: clean(input.brand), model: clean(input.model), fleet: clean(input.fleet), chassis: clean(input.chassis), renavam: clean(input.renavam), nf: clean(input.nf), operation, color: operation === 'Diversos' ? clean(input.color) : '', ready: input.ready === true || input.ready === 'true', stage: clean(input.stage) || 'Processos', status: clean(input.status) || 'Aguardando linha', yard: normalizeYard(input.yard), position: clean(input.position), linkedPlates: clean(input.linkedPlates, 100).toUpperCase(), notes: clean(input.notes, 500), enteredAt: input.enteredAt || todayInSaoPaulo(), presenceEvents: [], presenceStartedAt: createdAt, checklist: makeChecklist(input.checklist), photos: Array.isArray(input.photos) ? input.photos.slice(0, 8) : [], incidentPhotos: Array.isArray(input.incidentPhotos) ? input.incidentPhotos.slice(0, 8) : [], createdAt, updatedAt: createdAt };
     data.vehicles.push(vehicle); audit(data, user, 'Veículo cadastrado', vehicle, vehicle.yard); saveData(data); return json(res, 201, { vehicle: decorate(vehicle) });
   }
   const presenceCheckMatch = url.pathname.match(/^\/api\/vehicles\/([^/]+)\/presence-check$/);
@@ -173,7 +177,7 @@ async function api(req, res, url) {
   if (match && !vehicle) return json(res, 404, { error: 'Veículo não encontrado.' });
   if (vehicle && req.method === 'PUT') {
     const input = await body(req); const before = { yard: vehicle.yard || '', position: vehicle.position || '', status: vehicle.status || '' };
-    ['type','brand','model','chassis','renavam','nf','stage','status','yard','linkedPlates','notes'].forEach(k => { if (k in input) vehicle[k] = clean(input[k], k === 'notes' ? 500 : 100); });
+    ['type','brand','model','fleet','chassis','renavam','nf','stage','status','yard','position','linkedPlates','notes'].forEach(k => { if (k in input) vehicle[k] = k === 'yard' ? normalizeYard(input[k]) : clean(input[k], k === 'notes' ? 500 : 100); });
     if ('operation' in input) vehicle.operation = ['Correios', 'Diversos'].includes(clean(input.operation)) ? clean(input.operation) : 'Diversos';
     if ('color' in input) vehicle.color = vehicle.operation === 'Diversos' ? clean(input.color) : '';
     if ('ready' in input) vehicle.ready = input.ready === true || input.ready === 'true';

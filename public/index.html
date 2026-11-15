@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0b2748">
+  <meta name="theme-color" content="#191d21">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/images/icon-192.png">
-  <title>Controle Diário de Pátios · Diversos Print</title>
+  <title>Controle Diário de Frotas · Diversos Print</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -31,29 +31,139 @@
 
   <section id="appView" class="app-view hidden">
     <header class="app-header">
-      <div class="header-brand"><img src="/images/logo-print.png" alt="Transportadora Print"><div><b>Controle de Pátios</b><span>Operação Diversos</span></div></div>
-      <nav class="view-switch" aria-label="Visões do sistema">
-        <button class="active" data-view="daily">Hoje</button>
-        <button data-view="weekly">Semana</button>
-      </nav>
-      <div class="user"><button id="installApp" class="install-app hidden" type="button">Instalar app</button><span id="userName"></span><span id="userRole" class="role"></span><button id="logout" class="ghost compact">Sair</button></div>
+      <div class="header-left">
+        <nav class="view-switch" aria-label="Visões do sistema">
+          <button class="active" data-view="home">Painel</button>
+          <button data-view="daily">Veículos</button>
+          <button data-view="weekly">Semana</button>
+        </nav>
+      </div>
+      <h1 class="header-title">CONTROLE DIÁRIO DE FROTAS</h1>
+      <div class="user">
+        <button id="installApp" class="install-app hidden" type="button">Instalar app</button>
+        <div class="user-profile" title="Usuário conectado">
+          <span id="userName"></span>
+          <span id="userRole" class="role"></span>
+          <span class="user-avatar" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3.6c1.93 0 3.5 1.57 3.5 3.5S13.93 12.6 12 12.6s-3.5-1.57-3.5-3.5S10.07 5.6 12 5.6zm0 14.4c-2.67 0-5.03-1.35-6.42-3.41.03-2.13 4.28-3.29 6.42-3.29 2.13 0 6.39 1.16 6.42 3.29C17.03 18.65 14.67 20 12 20z"/></svg>
+          </span>
+        </div>
+        <button id="logout" class="ghost compact">Sair</button>
+      </div>
     </header>
 
     <main>
-      <section id="dailyView" class="view-panel">
+      <section id="homeView" class="view-panel showcase-board">
+        <!-- Seção Caminhões -->
+        <section class="fleet-group" data-group="caminhoes">
+          <div class="group-bar">
+            <h2>Caminhões</h2>
+            <div class="group-yards">
+              <button type="button" class="yard-pill" data-group-yard="Pátio Central">Pátio Central</button>
+              <button type="button" class="yard-pill" data-group-yard="Bandeirantes">Bandeirantes</button>
+              <button type="button" class="yard-pill" data-group-yard="Cajamar">Cajamar</button>
+            </div>
+          </div>
+          <div class="fleet-cards grid-4">
+            <article class="fleet-card" data-category="Caminhões · TOCO" data-key="toco" data-default-type="Caminhão Toco" data-default-operation="Diversos" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/toco.webp" alt="Caminhão Toco"></div>
+              <div class="fleet-info"><h3>TOCO</h3></div>
+            </article>
+            <article class="fleet-card" data-category="Caminhões · TRUCK" data-key="truck" data-default-type="Caminhão Truck" data-default-operation="Diversos" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/truck.webp" alt="Caminhão Truck"></div>
+              <div class="fleet-info"><h3>TRUCK</h3></div>
+            </article>
+            <article class="fleet-card" data-category="Caminhões · 3/4" data-key="vuc" data-default-type="VUC / 3/4" data-default-operation="Diversos" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/accelo.webp" alt="Caminhão 3/4"></div>
+              <div class="fleet-info"><h3>3/4</h3></div>
+            </article>
+            <article class="fleet-card" data-category="Caminhões · CAVALO" data-key="cavalo" data-default-type="Cavalo" data-default-operation="Diversos" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/cavalo.webp" alt="Cavalo Mecânico"></div>
+              <div class="fleet-info"><h3>CAVALO</h3></div>
+            </article>
+          </div>
+        </section>
+
+        <!-- Seção Carretas -->
+        <section class="fleet-group" data-group="carretas">
+          <div class="group-bar">
+            <h2>Carretas</h2>
+            <div class="group-yards">
+              <button type="button" class="yard-pill" data-group-yard="Pátio Central">Pátio Central</button>
+              <button type="button" class="yard-pill" data-group-yard="Pátio Superior">Pátio Superior</button>
+              <button type="button" class="yard-pill" data-group-yard="Bandeirantes">Bandeirantes</button>
+              <button type="button" class="yard-pill" data-group-yard="Cajamar">Cajamar</button>
+            </div>
+          </div>
+          <div class="fleet-cards grid-5">
+            <article class="fleet-card compact-card" data-category="Carretas · DIVERSOS PRATA" data-key="carreta_prata" data-default-type="Carreta" data-default-operation="Diversos" data-default-color="Prata" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/carretadiversos.webp" alt="Carreta Diversos Prata"></div>
+              <div class="fleet-info"><h3>DIVERSOS<br>PRATA</h3></div>
+            </article>
+            <article class="fleet-card compact-card" data-category="Carretas · DIVERSOS AMARELA" data-key="carreta_amarela" data-default-type="Carreta" data-default-operation="Diversos" data-default-color="Amarela" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/diversosamarela.webp" alt="Carreta Diversos Amarela"></div>
+              <div class="fleet-info"><h3>DIVERSOS<br>AMARELA</h3></div>
+            </article>
+            <article class="fleet-card compact-card" data-category="Carretas · DIVERSOS BRANCA" data-key="carreta_branca" data-default-type="Carreta" data-default-operation="Diversos" data-default-color="Branca" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/carretabranca.webp" alt="Carreta Diversos Branca"></div>
+              <div class="fleet-info"><h3>DIVERSOS<br>BRANCA</h3></div>
+            </article>
+            <article class="fleet-card compact-card" data-category="Carretas · RODOTREM" data-key="rodotrem" data-default-type="Rodotrem" data-default-operation="Diversos" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/rodotrem.webp" alt="Rodotrem"></div>
+              <div class="fleet-info"><h3>RODOTREM</h3></div>
+            </article>
+            <article class="fleet-card compact-card" data-category="Carretas · CORREIOS" data-key="carreta_correios" data-default-type="Carreta" data-default-operation="Correios" role="button" tabindex="0">
+              <div class="fleet-thumb"><img src="/images/carretacorreios.webp" alt="Carreta Correios"></div>
+              <div class="fleet-info"><h3>CORREIOS</h3></div>
+            </article>
+          </div>
+        </section>
+
+        <!-- Seção Conjuntos -->
+        <section class="fleet-group" data-group="conjuntos">
+          <div class="group-bar">
+            <h2>Conjuntos</h2>
+            <div class="group-yards">
+              <button type="button" class="yard-pill" data-group-yard="Pátio Central">Pátio Central</button>
+              <button type="button" class="yard-pill" data-group-yard="Bandeirantes">Bandeirantes</button>
+              <button type="button" class="yard-pill" data-group-yard="Cajamar">Cajamar</button>
+            </div>
+          </div>
+          <div class="fleet-cards grid-2">
+            <article class="fleet-card large-card" data-category="Conjuntos · DIVERSOS" data-key="conjunto_diversos" data-default-type="Conjunto Diversos" data-default-operation="Diversos" role="button" tabindex="0">
+              <div class="fleet-thumb highlighted-thumb"><img src="/images/conjuntodiversos.webp" alt="Conjunto Diversos"></div>
+              <div class="fleet-info"><h3>DIVERSOS</h3></div>
+            </article>
+            <article class="fleet-card large-card" data-category="Conjuntos · CORREIOS" data-key="conjunto_correios" data-default-type="Conjunto Correios" data-default-operation="Correios" role="button" tabindex="0">
+              <div class="fleet-thumb highlighted-thumb"><img src="/images/conjuntocorreios.webp" alt="Conjunto Correios"></div>
+              <div class="fleet-info"><h3>CORREIOS</h3></div>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section id="dailyView" class="view-panel hidden">
         <div class="page-heading">
-          <div><span class="eyebrow">CONTROLE OPERACIONAL</span><h1>Movimentação de hoje</h1><p id="todayLabel"></p></div>
-          <button id="newVehicle" class="primary">＋ Registrar veículo</button>
+          <div>
+            <button type="button" id="backToHome" class="back-link">← Voltar ao painel principal</button>
+            <span class="eyebrow">CONTROLE OPERACIONAL</span>
+            <h1 id="dailyTitle">Movimentação de hoje</h1>
+            <p id="todayLabel"></p>
+          </div>
+          <div class="heading-actions">
+            <button type="button" id="clearCategoryFilter" class="secondary hidden">Ver toda a frota</button>
+            <button id="newVehicle" class="primary">＋ Registrar veículo</button>
+          </div>
         </div>
 
         <section id="dailyMetrics" class="daily-metrics" aria-label="Resumo do dia"></section>
 
         <section class="control-panel">
-          <div class="panel-title"><div><h2>Veículos nos pátios</h2><p>Posição atual, tempo de permanência e última atualização.</p></div><span id="resultCount" class="result-count"></span></div>
+          <div class="panel-title"><div><h2 id="panelSubtitle">Veículos nos pátios</h2><p>Posição atual, tempo de permanência e última atualização.</p></div><span id="resultCount" class="result-count"></span></div>
           <nav id="yardTabs" class="yard-tabs" aria-label="Filtrar por pátio"></nav>
           <div class="toolbar">
             <label class="search-box"><span>⌕</span><input id="search" placeholder="Buscar placa, frota, posição ou conjunto"></label>
-            <select id="statusFilter" aria-label="Filtrar por status"><option value="all">Todos os status</option><option value="ready">Prontas</option><option value="No pátio">No pátio</option><option value="Aguardando operação">Aguardando operação</option><option value="Em manutenção">Em manutenção</option><option value="Sinistro">Sinistro</option><option value="Em rota">Em rota / fora</option></select>
+            <select id="statusFilter" aria-label="Filtrar por status"><option value="all">Todos os status</option><option value="ready">Pronto para uso</option><option value="No pátio">No pátio</option><option value="Aguardando operação">Aguardando operação</option><option value="Em manutenção">Em manutenção</option><option value="Sinistro">Sinistro</option><option value="Em rota">Em rota / fora</option></select>
             <select id="operationFilter" aria-label="Filtrar por operação"><option value="all">Todas as operações</option><option value="Correios">Correios</option><option value="Diversos">Diversos</option></select>
             <select id="checklistFilter" aria-label="Filtrar por checklist"><option value="all">Todos os checklists</option><option value="ok">OK</option><option value="pendente">Com pendência</option></select>
             <div class="toolbar-actions"><button id="pdfButton" class="secondary">Gerar PDF</button><button id="historyButton" class="secondary">Histórico</button><button id="backupButton" class="secondary admin-backup">Backup</button><button id="restoreButton" class="secondary admin-backup">Restaurar</button><input id="restoreFile" type="file" accept="application/json,.json" hidden></div>
@@ -98,22 +208,30 @@
           </optgroup>
           <optgroup label="Carretas e implementos">
             <option>Carreta</option>
+            <option>Carreta Diversos Prata</option>
+            <option>Carreta Diversos Amarela</option>
+            <option>Carreta Diversos Branca</option>
+            <option>Carreta Correios</option>
             <option>Rodotrem</option>
             <option>Semirreboque</option>
             <option>Dolly</option>
+          </optgroup>
+          <optgroup label="Conjuntos">
+            <option>Conjunto Diversos</option>
+            <option>Conjunto Correios</option>
           </optgroup>
         </select></label>
         <label>Placas do conjunto<input id="linkedPlates" placeholder="Ex.: ABC1D23 + DEF4G56"></label>
       </div></section>
       <section class="form-section operational"><h3>Situação no pátio</h3><div class="form-grid">
-        <label>Pátio<select id="yard"><option>Cajamar</option><option>Jaraguá</option><option>Bandeirantes</option><option>Pátio Superior</option></select></label>
-        <label>Status<select id="status"><option>No pátio</option><option>Aguardando operação</option><option>Em manutenção</option><option>Sinistro</option><option>Em rota</option><option>Fora do pátio</option></select></label>
+        <label>Pátio<select id="yard"><option>Pátio Central</option><option>Pátio Superior</option><option>Bandeirantes</option><option>Cajamar</option></select></label>
+        <label>Status<select id="status"><option>Pronto para uso</option><option>No pátio</option><option>Aguardando operação</option><option>Em manutenção</option><option>Sinistro</option><option>Em rota</option><option>Fora do pátio</option></select></label>
         <label>Entrada no pátio<input id="enteredAt" type="date" required></label>
         <label class="span-2">Observações<textarea id="notes" rows="3" placeholder="Informações relevantes para o turno seguinte"></textarea></label>
-        <label class="ready-check"><input id="ready" type="checkbox"> Carreta pronta para operação</label>
+        <label class="ready-check"><input id="ready" type="checkbox"> Veículo / carreta pronta para uso</label>
       </div></section>
       <details class="advanced"><summary>Dados complementares do veículo</summary><div class="form-grid advanced-grid">
-        <label>Marca<select id="brand"><option>Facchini</option><option>Randon</option><option>RodoWesley</option><option>Guerra</option><option>Outra</option></select></label><label>Modelo<input id="model"></label><label>Chassi<input id="chassis"></label><label>RENAVAM<input id="renavam"></label><label>NF<input id="nf"></label><label>Operação<select id="operation"><option>Correios</option><option>Diversos</option></select></label><label>Cor (Diversos)<input id="color" placeholder="Ex.: Azul"></label><input id="stage" type="hidden" value="Controle de pátio">
+        <label>Marca<select id="brand"><option>Facchini</option><option>Randon</option><option>RodoWesley</option><option>Guerra</option><option>Mercedes-Benz</option><option>Volkswagen</option><option>DAF</option><option>Volvo</option><option>Scania</option><option>Outra</option></select></label><label>Modelo<input id="model"></label><label>Chassi<input id="chassis"></label><label>RENAVAM<input id="renavam"></label><label>NF<input id="nf"></label><label>Operação<select id="operation"><option>Correios</option><option>Diversos</option></select></label><label>Cor (Diversos)<input id="color" placeholder="Ex.: Prata, Amarela, Branca"></label><input id="stage" type="hidden" value="Controle de pátio">
       </div></details>
       <section class="form-section"><h3>Checklist inicial da carreta</h3><div id="checklistFields" class="checklist-fields"><p class="muted">Os itens serão carregados ao abrir o cadastro.</p></div></section>
       <section class="form-section"><h3>Fotos da carreta</h3><div class="photo-inputs"><label>Selecionar fotos<input id="photos" type="file" accept="image/*" multiple></label><label class="camera-input">Abrir câmera<input id="cameraPhotos" type="file" accept="image/*" capture="environment"></label></div><div id="photoPreview" class="photo-preview"></div></section>
