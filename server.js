@@ -180,6 +180,7 @@ async function api(req, res, url) {
   const data = await readData();
   if (req.method === 'GET' && url.pathname === '/api/vehicle-catalog') {
     const query = searchKey(url.searchParams.get('q'));
+    if (url.searchParams.get('all') === '1') return json(res, 200, { items: vehicleCatalog });
     if (query.length < 1) return json(res, 200, { items: [] });
     const matches = vehicleCatalog.filter(item => [item.plate, item.plateAux, item.linkedPlate, item.chassis].some(value => searchKey(value).includes(query)));
     matches.sort((a, b) => {

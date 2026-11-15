@@ -11,12 +11,87 @@ let weekOffset = 0;
 let deferredInstallPrompt = null;
 let catalogResults = [];
 let catalogRequestId = 0;
+let syncingOfflineQueue = false;
+
+const offlineDB = (() => {
+  let connection;
+  function open() {
+    if (connection) return connection;
+    connection = new Promise((resolve, reject) => {
+      const request = indexedDB.open('patio-diversos-offline', 1);
+      request.onupgradeneeded = () => { const db = request.result; if (!db.objectStoreNames.contains('cache')) db.createObjectStore('cache'); if (!db.objectStoreNames.contains('queue')) db.createObjectStore('queue', { keyPath: 'id' }); };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return connection;
+  }
+  async function read(store, key) { const db = await open(); return new Promise((resolve, reject) => { const tx = db.transaction(store, 'readonly'); const request = tx.objectStore(store).get(key); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
+  async function write(store, key, value) { const db = await open(); return new Promise((resolve, reject) => { const tx = db.transaction(store, 'readwrite'); const request = tx.objectStore(store).put(value, key); request.onsuccess = () => resolve(value); request.onerror = () => reject(request.error); }); }
+  async function remove(store, key) { const db = await open(); return new Promise((resolve, reject) => { const tx = db.transaction(store, 'readwrite'); const request = tx.objectStore(store).delete(key); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); }); }
+  async function all(store) { const db = await open(); return new Promise((resolve, reject) => { const tx = db.transaction(store, 'readonly'); const request = tx.objectStore(store).getAll(); request.onsuccess = () => resolve(request.result || []); request.onerror = () => reject(request.error); }); }
+  return { read, write, remove, all };
+})();
+
+function setConnectionStatus(mode) {
+  const element = $('#connectionStatus');
+  if (!element) return;
+  element.textContent = mode === 'syncing' ? 'Sincronizando…' : mode === 'offline' ? 'Offline · salvo neste dispositivo' : 'Online';
+  element.className = `connection-status ${mode}`;
+}
+async function cacheState(data) { try { await offlineDB.write('cache', 'state', data); } catch { /* cache opcional */ } }
+async function cachedState() { try { return await offlineDB.read('cache', 'state'); } catch { return null; } }
+async function cachedCatalog() { try { return (await offlineDB.read('cache', 'catalog')) || []; } catch { return []; } }
+async function cacheCatalog(items) { try { await offlineDB.write('cache', 'catalog', items); } catch { /* cache opcional */ } }
+async function queueOfflineMutation(url, options, tempId = '') { const item = { id: crypto.randomUUID(), url, options: { method: options.method, headers: options.headers, body: options.body }, tempId, createdAt: Date.now() }; await offlineDB.write('queue', item.id, item); return item; }
+async function offlineMutations() { try { return (await offlineDB.all('queue')).sort((a, b) => a.createdAt - b.createdAt); } catch { return []; } }
+function localAudit(vehicle, action, detail = '') { state.history.unshift({ id: crypto.randomUUID(), at: new Date().toISOString(), user: state.user?.name || 'Offline', action, vehicleId: vehicle.id, plate: vehicle.plate, detail, yard: vehicle.yard || '', position: vehicle.position || '', status: vehicle.status || '', type: vehicle.type || '', enteredAt: vehicle.enteredAt || '' }); state.history = state.history.slice(0, 2000); }
+async function applyOfflineMutation(url, options) {
+  const input = options.body ? JSON.parse(options.body) : {};
+  const match = url.match(/^\/api\/vehicles\/([^/]+)(?:\/presence-check)?$/);
+  if (options.method === 'POST' && url === '/api/vehicles') {
+    const now = new Date().toISOString();
+    const vehicle = { ...input, id: `offline-${crypto.randomUUID()}`, plate: String(input.plate || '').toUpperCase(), createdAt: now, updatedAt: now, enteredAt: input.enteredAt || localDateKey(), presenceEvents: [], presenceStartedAt: now, checklist: input.checklist || state.checklistTemplate, photos: input.photos || [], incidentPhotos: input.incidentPhotos || [], available: false };
+    state.vehicles.push(vehicle); localAudit(vehicle, 'Veículo cadastrado offline', 'Aguardando sincronização'); await cacheState({ vehicles: state.vehicles, history: state.history, checklistTemplate: state.checklistTemplate }); return { vehicle, offline: true };
+  }
+  if (match) {
+    const vehicle = state.vehicles.find(item => item.id === match[1]);
+    if (!vehicle) throw new Error('Veículo não encontrado no cache offline.');
+    if (url.endsWith('/presence-check')) { const present = input.present === true || input.present === 'true'; const event = { id: crypto.randomUUID(), date: input.date || localDateKey(), at: new Date().toISOString(), present, user: state.user?.name || 'Offline', yard: vehicle.yard || '', position: vehicle.position || '' }; vehicle.presenceEvents = [event, ...(vehicle.presenceEvents || [])].slice(0, 365); vehicle.status = present ? 'No pátio' : 'Fora do pátio'; vehicle.updatedAt = event.at; localAudit(vehicle, present ? 'Presença confirmada offline' : 'Saída confirmada offline', 'Aguardando sincronização'); }
+    else if (options.method === 'PUT') { Object.assign(vehicle, input, { updatedAt: new Date().toISOString() }); localAudit(vehicle, 'Cadastro atualizado offline', 'Aguardando sincronização'); }
+    await cacheState({ vehicles: state.vehicles, history: state.history, checklistTemplate: state.checklistTemplate }); return { vehicle, offline: true };
+  }
+  throw new Error('Esta operação não pode ser feita offline.');
+}
+async function syncOfflineQueue() {
+  if (syncingOfflineQueue || !navigator.onLine) return;
+  const queue = await offlineMutations(); if (!queue.length) return;
+  syncingOfflineQueue = true; setConnectionStatus('syncing');
+  try {
+    for (const item of queue) {
+      const response = await fetch(item.url, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(item.options.headers || {}) }, ...item.options });
+      if (!response.ok) throw new Error('A sincronização foi interrompida.');
+      const result = await response.json().catch(() => ({}));
+      if (item.tempId && result.vehicle?.id) { const local = state.vehicles.find(vehicle => vehicle.id === item.tempId); if (local) Object.assign(local, result.vehicle); }
+      await offlineDB.remove('queue', item.id);
+    }
+    setConnectionStatus('online'); await load(); toast('Alterações offline sincronizadas.');
+  } catch { setConnectionStatus('offline'); }
+  finally { syncingOfflineQueue = false; }
+}
 
 async function request(url, options = {}) {
-  const response = await fetch(url, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Falha na solicitação.');
-  return data;
+  try {
+    const response = await fetch(url, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Falha na solicitação.');
+    setConnectionStatus('online');
+    return data;
+  } catch (error) {
+    if ((options.method || 'GET') === 'GET' && url === '/api/state') { const data = await cachedState(); if (data) { setConnectionStatus('offline'); return data; } }
+    if ((options.method || 'GET') === 'GET' && url.startsWith('/api/vehicle-catalog')) { const query = normalizedCatalogValue(new URL(url, location.origin).searchParams.get('q')); const items = (await cachedCatalog()).filter(item => [item.plate, item.plateAux, item.linkedPlate, item.chassis].some(value => normalizedCatalogValue(value).includes(query))).slice(0, 30); setConnectionStatus('offline'); return { items }; }
+    if (['POST', 'PUT'].includes(options.method) && !url.includes('/api/login')) { const result = await applyOfflineMutation(url, options); await queueOfflineMutation(url, options, result.vehicle?.id?.startsWith('offline-') ? result.vehicle.id : ''); setConnectionStatus('offline'); return result; }
+    throw error;
+  }
 }
 
 function normalizedCatalogValue(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
@@ -218,18 +293,21 @@ function switchView(viewName) {
 function loginScreen() { $('#loginView').classList.remove('hidden'); $('#appView').classList.add('hidden'); }
 async function enter(user) {
   state.user = user;
+  try { await offlineDB.write('cache', 'user', user); } catch { /* cache opcional */ }
   $('#userName').textContent = user.name;
   $('#userRole').textContent = user.role;
   document.querySelectorAll('.admin-backup').forEach(element => element.classList.toggle('hidden', user.role !== 'admin'));
   $('#loginView').classList.add('hidden');
   $('#appView').classList.remove('hidden');
   await load();
+  if (navigator.onLine) { request('/api/vehicle-catalog?all=1').then(data => cacheCatalog(data.items || [])).catch(() => {}); syncOfflineQueue(); }
 }
 async function load() {
   const data = await request('/api/state');
   data.vehicles = (data.vehicles || []).map(v => ({ ...v, yard: normalizeYardName(v.yard) }));
   data.history = (data.history || []).map(h => ({ ...h, yard: normalizeYardName(h.yard) }));
   Object.assign(state, data);
+  await cacheState({ vehicles: state.vehicles, history: state.history, checklistTemplate: state.checklistTemplate });
   renderAll();
 }
 
@@ -561,7 +639,7 @@ $('#plate').addEventListener('input', event => searchVehicleCatalog(event.target
 $('#plate').addEventListener('change', event => applyExactCatalogMatch(event.target.value, 'plate'));
 $('#chassis').addEventListener('input', event => searchVehicleCatalog(event.target.value, 'chassis'));
 $('#chassis').addEventListener('change', event => applyExactCatalogMatch(event.target.value, 'chassis'));
-$('#logout').onclick = async () => { await request('/api/logout', { method: 'POST' }); loginScreen(); };
+$('#logout').onclick = async () => { try { await request('/api/logout', { method: 'POST' }); } catch { /* permite sair mesmo offline */ } loginScreen(); };
 $('#newVehicle').onclick = () => openVehicle();
 $('#dailyMetrics').onclick = event => { const card = event.target.closest('[data-metric-filter]'); if (!card) return; activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };
 $('#dailyMetrics').onkeydown = event => { if (event.key !== 'Enter' && event.key !== ' ') return; const card = event.target.closest('[data-metric-filter]'); if (!card) return; event.preventDefault(); activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };
@@ -632,4 +710,6 @@ window.addEventListener('appinstalled', () => { deferredInstallPrompt = null; $(
 $('#installApp').onclick = async () => { if (deferredInstallPrompt) { deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice; deferredInstallPrompt = null; updateInstallButton(); return; } toast('No menu do navegador, escolha “Instalar aplicativo”.'); };
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 updateInstallButton();
-request('/api/me').then(data => enter(data.user)).catch(loginScreen);
+window.addEventListener('online', () => { setConnectionStatus('online'); syncOfflineQueue(); load().catch(() => {}); });
+window.addEventListener('offline', () => setConnectionStatus('offline'));
+request('/api/me').then(data => enter(data.user)).catch(async () => { const user = await offlineDB.read('cache', 'user').catch(() => null); const cached = await cachedState(); if (user && cached) { setConnectionStatus('offline'); await enter(user); } else loginScreen(); });
