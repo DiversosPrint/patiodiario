@@ -537,3 +537,4 @@ dialog::backdrop { background: rgba(5, 24, 45, .7); backdrop-filter: blur(3px); 
   .history-item { grid-template-columns: 80px 10px 1fr; }
   .timeline-stats { grid-template-columns: 1fr 1fr; }
 }
+.catalog-hint { display: block; min-height: 1.2em; color: #4a7c59; font-size: .78rem; margin-top: 4px; }

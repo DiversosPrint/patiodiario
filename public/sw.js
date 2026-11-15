@@ -1,4 +1,4 @@
-const CACHE_NAME = 'patio-diversos-print-v6-diario';
+const CACHE_NAME = 'patio-diversos-print-v7-catalogo';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

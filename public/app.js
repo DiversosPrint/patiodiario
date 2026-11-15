@@ -9,12 +9,73 @@ let activeCategoryFilter = null;
 let activeMetricFilter = '';
 let weekOffset = 0;
 let deferredInstallPrompt = null;
+let catalogResults = [];
+let catalogRequestId = 0;
 
 async function request(url, options = {}) {
   const response = await fetch(url, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Falha na solicitação.');
   return data;
+}
+
+function normalizedCatalogValue(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function catalogType(value) {
+  const type = String(value || '').toUpperCase();
+  if (type.includes('CAVALO')) return 'Cavalo';
+  if (type.includes('VAN')) return 'Van';
+  if (type.includes('TRUCK')) return 'Caminhão Truck';
+  if (type.includes('TOCO')) return 'Caminhão Toco';
+  if (type.includes('CARRETA') || type.includes('SEMIRREBOQUE') || type.includes('RODOTREM') || type.includes('DOLLY')) return 'Carreta';
+  return '';
+}
+function setCatalogSelect(id, value) {
+  if (!value || !$(id)) return;
+  const select = $(id);
+  if (![...select.options].some(option => option.value === value)) select.add(new Option(value, value));
+  select.value = value;
+}
+function applyCatalogItem(item) {
+  if (!item) return;
+  if (item.plate) $('#plate').value = item.plate;
+  setCatalogSelect('#type', catalogType(item.type));
+  setCatalogSelect('#brand', item.brand);
+  if (item.model) $('#model').value = item.model;
+  if (item.chassis) $('#chassis').value = item.chassis;
+  if (item.renavam) $('#renavam').value = item.renavam;
+  if (item.operation) setCatalogSelect('#operation', /correios/i.test(item.operation) ? 'Correios' : 'Diversos');
+  if (item.color && !/^0$/.test(item.color)) $('#color').value = item.color;
+  const linked = [...new Set([item.plateAux, item.linkedPlate].filter(Boolean).map(value => value.toUpperCase()))].filter(value => value !== item.plate).join(' + ');
+  if (linked) $('#linkedPlates').value = linked;
+  if (item.operationalDetails && !$('#notes').value) $('#notes').value = item.operationalDetails;
+  toggleColorField();
+  $('#catalogHint').textContent = `Dados preenchidos pela planilha · ${item.brand || ''} ${item.model || ''}`.trim();
+}
+async function searchVehicleCatalog(value, field) {
+  const query = String(value || '').trim();
+  if (query.length < 2) { catalogResults = []; $(`#${field}Suggestions`).innerHTML = ''; if ($('#catalogHint')) $('#catalogHint').textContent = ''; return; }
+  const requestId = ++catalogRequestId;
+  try {
+    const result = await request(`/api/vehicle-catalog?q=${encodeURIComponent(query)}`);
+    if (requestId !== catalogRequestId) return;
+    catalogResults = result.items || [];
+    const list = $(`#${field}Suggestions`);
+    list.innerHTML = catalogResults.map(item => {
+      const value = field === 'plate' ? item.plate : item.chassis;
+      const detail = [item.brand, item.model, item.type].filter(Boolean).join(' · ');
+      return `<option value="${esc(value)}" label="${esc(detail)}"></option>`;
+    }).join('');
+    if ($('#catalogHint')) $('#catalogHint').textContent = catalogResults.length ? `${catalogResults.length} possível(is) encontrado(s) na planilha` : 'Nenhum registro correspondente na planilha';
+  } catch { /* autocomplete não deve bloquear o cadastro */ }
+}
+function applyExactCatalogMatch(value, field) {
+  const key = normalizedCatalogValue(value);
+  if (!key) return;
+  const item = catalogResults.find(candidate => {
+    const values = field === 'plate' ? [candidate.plate, candidate.plateAux] : [candidate.chassis];
+    return values.some(candidateValue => normalizedCatalogValue(candidateValue) === key);
+  });
+  if (item) applyCatalogItem(item);
 }
 
 function esc(value) { const node = document.createElement('div'); node.textContent = value || ''; return node.innerHTML; }
@@ -375,6 +436,10 @@ function openVehicleTimeline(id) {
 function openVehicle(id = '') {
   const vehicle = state.vehicles.find(item => item.id === id);
   $('#vehicleForm').reset();
+  catalogResults = [];
+  $('#plateSuggestions').innerHTML = '';
+  $('#chassisSuggestions').innerHTML = '';
+  $('#catalogHint').textContent = '';
   $('#photos').dataset.loaded = JSON.stringify(vehicle?.photos || []);
   $('#incidentPhotos').dataset.loaded = JSON.stringify(vehicle?.incidentPhotos || []);
   $('#vehicleId').value = vehicle?.id || '';
@@ -492,6 +557,10 @@ $('#closeImage').onclick = () => $('#imageDialog').close();
 $('#loginForm').addEventListener('submit', async event => { event.preventDefault(); $('#loginError').textContent = ''; try { const data = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: $('#username').value, password: $('#password').value }) }); await enter(data.user); } catch (error) { $('#loginError').textContent = error.message; } });
 $('#showPassword').onclick = () => { $('#password').type = $('#password').type === 'password' ? 'text' : 'password'; };
 $('#operation').onchange = toggleColorField;
+$('#plate').addEventListener('input', event => searchVehicleCatalog(event.target.value, 'plate'));
+$('#plate').addEventListener('change', event => applyExactCatalogMatch(event.target.value, 'plate'));
+$('#chassis').addEventListener('input', event => searchVehicleCatalog(event.target.value, 'chassis'));
+$('#chassis').addEventListener('change', event => applyExactCatalogMatch(event.target.value, 'chassis'));
 $('#logout').onclick = async () => { await request('/api/logout', { method: 'POST' }); loginScreen(); };
 $('#newVehicle').onclick = () => openVehicle();
 $('#dailyMetrics').onclick = event => { const card = event.target.closest('[data-metric-filter]'); if (!card) return; activeMetricFilter = activeMetricFilter === card.dataset.metricFilter ? '' : card.dataset.metricFilter; renderDailyMetrics(); renderVehicles(); };

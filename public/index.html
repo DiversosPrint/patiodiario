@@ -195,7 +195,7 @@
       <div class="dialog-head"><div><span class="eyebrow">REGISTRO OPERACIONAL</span><h2 id="dialogTitle">Novo veículo</h2><p>Atualize a localização para registrar uma movimentação no histórico.</p></div><button type="button" class="close" data-close aria-label="Fechar">×</button></div>
       <input type="hidden" id="vehicleId">
       <section class="form-section"><h3>Identificação</h3><div class="form-grid">
-        <label>Placa principal<input id="plate" maxlength="8" required placeholder="ABC1D23"></label>
+        <label>Placa principal<input id="plate" list="plateSuggestions" maxlength="8" required placeholder="ABC1D23" autocomplete="off"><datalist id="plateSuggestions"></datalist><small id="catalogHint" class="catalog-hint" aria-live="polite"></small></label>
         <label>Tipo<select id="type">
           <optgroup label="Veículos motorizados">
             <option>Cavalo</option>
@@ -231,7 +231,7 @@
         <label class="ready-check"><input id="ready" type="checkbox"> Veículo / carreta pronta para uso</label>
       </div></section>
       <details class="advanced"><summary>Dados complementares do veículo</summary><div class="form-grid advanced-grid">
-        <label>Marca<select id="brand"><option>Facchini</option><option>Randon</option><option>RodoWesley</option><option>Guerra</option><option>Mercedes-Benz</option><option>Volkswagen</option><option>DAF</option><option>Volvo</option><option>Scania</option><option>Outra</option></select></label><label>Modelo<input id="model"></label><label>Chassi<input id="chassis"></label><label>RENAVAM<input id="renavam"></label><label>NF<input id="nf"></label><label>Operação<select id="operation"><option>Correios</option><option>Diversos</option></select></label><label>Cor (Diversos)<input id="color" placeholder="Ex.: Prata, Amarela, Branca"></label><input id="stage" type="hidden" value="Controle de pátio">
+        <label>Marca<select id="brand"><option>Facchini</option><option>Randon</option><option>RodoWesley</option><option>Guerra</option><option>Mercedes-Benz</option><option>Volkswagen</option><option>DAF</option><option>Volvo</option><option>Scania</option><option>Outra</option></select></label><label>Modelo<input id="model"></label><label>Chassi<input id="chassis" list="chassisSuggestions" autocomplete="off"><datalist id="chassisSuggestions"></datalist></label><label>RENAVAM<input id="renavam"></label><label>NF<input id="nf"></label><label>Operação<select id="operation"><option>Correios</option><option>Diversos</option></select></label><label>Cor (Diversos)<input id="color" placeholder="Ex.: Prata, Amarela, Branca"></label><input id="stage" type="hidden" value="Controle de pátio">
       </div></details>
       <section class="form-section"><h3>Checklist inicial da carreta</h3><div id="checklistFields" class="checklist-fields"><p class="muted">Os itens serão carregados ao abrir o cadastro.</p></div></section>
       <section class="form-section"><h3>Fotos da carreta</h3><div class="photo-inputs"><label>Selecionar fotos<input id="photos" type="file" accept="image/*" multiple></label><label class="camera-input">Abrir câmera<input id="cameraPhotos" type="file" accept="image/*" capture="environment"></label></div><div id="photoPreview" class="photo-preview"></div></section>

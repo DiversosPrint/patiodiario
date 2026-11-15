@@ -11,6 +11,8 @@ const PUBLIC = path.join(ROOT, 'public');
 let DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 let DATA_FILE = path.join(DATA_DIR, 'fleet.json');
 const sessions = new Map();
+const CATALOG_FILE = path.join(ROOT, 'data', 'vehicle-catalog.json');
+let vehicleCatalog = [];
 
 const USERS = {
   admin: { password: process.env.PATIO_ADMIN_PASSWORD || '1234', name: 'Administrador', role: 'admin' },
@@ -25,6 +27,14 @@ const CHECKLIST = {
 
 function initialData() {
   return { vehicles: [], history: [], updatedAt: new Date().toISOString() };
+}
+function readVehicleCatalog() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(CATALOG_FILE, 'utf8'));
+    return Array.isArray(parsed.records) ? parsed.records : [];
+  } catch {
+    return [];
+  }
 }
 function readData() {
   try {
@@ -65,6 +75,7 @@ function currentUser(req) {
   return session.user;
 }
 function clean(value, max = 100) { return String(value || '').trim().slice(0, max); }
+function searchKey(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 function todayInSaoPaulo() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
 function plate(value) { return clean(value, 8).toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 function plateType(value) { return /^[A-Z]{3}\d{4}$/.test(value) ? 'vermelha' : 'mercosul'; }
@@ -126,6 +137,19 @@ async function api(req, res, url) {
   const user = currentUser(req); if (!user) return json(res, 401, { error: 'Sessão expirada.' });
   if (req.method === 'GET' && url.pathname === '/api/me') return json(res, 200, { user });
   const data = readData();
+  if (req.method === 'GET' && url.pathname === '/api/vehicle-catalog') {
+    const query = searchKey(url.searchParams.get('q'));
+    if (query.length < 1) return json(res, 200, { items: [] });
+    const matches = vehicleCatalog.filter(item => [item.plate, item.plateAux, item.linkedPlate, item.chassis].some(value => searchKey(value).includes(query)));
+    matches.sort((a, b) => {
+      const aKey = [a.plate, a.plateAux, a.linkedPlate, a.chassis].map(searchKey);
+      const bKey = [b.plate, b.plateAux, b.linkedPlate, b.chassis].map(searchKey);
+      const aPrefix = aKey.some(value => value.startsWith(query));
+      const bPrefix = bKey.some(value => value.startsWith(query));
+      return Number(bPrefix) - Number(aPrefix) || String(a.plate).localeCompare(String(b.plate));
+    });
+    return json(res, 200, { items: matches.slice(0, 30) });
+  }
   if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { vehicles: data.vehicles.map(decorate), history: data.history, checklistTemplate: CHECKLIST });
   if (req.method === 'GET' && url.pathname === '/api/backup') {
     if (user.role !== 'admin') return json(res, 403, { error: 'Apenas o administrador pode fazer backup.' });
@@ -201,6 +225,7 @@ async function api(req, res, url) {
   return json(res, 404, { error: 'Rota não encontrada.' });
 }
 
+vehicleCatalog = readVehicleCatalog();
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname.startsWith('/api/')) api(req, res, url).catch(err => json(res, 400, { error: err.message || 'Falha na solicitação.' })); else serve(req, res);
