@@ -13,7 +13,14 @@ let DATA_FILE = path.join(DATA_DIR, 'fleet.json');
 const sessions = new Map();
 const CATALOG_FILE = path.join(ROOT, 'data', 'vehicle-catalog.json');
 let vehicleCatalog = [];
-const databaseConfigured = Boolean(process.env.DB_NAME && process.env.DB_USER && process.env.DB_PASSWORD);
+const dbConfig = {
+  host: process.env.DB_HOST || process.env.MYSQL_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT || process.env.MYSQL_PORT || 3306),
+  user: process.env.DB_USER || process.env.MYSQL_USER || process.env.MYSQL_USERNAME,
+  password: process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD,
+  database: process.env.DB_NAME || process.env.MYSQL_DATABASE || process.env.MYSQL_DB
+};
+const databaseConfigured = Boolean(dbConfig.database && dbConfig.user && dbConfig.password);
 let dbPool = null;
 let dbReady = null;
 
@@ -62,7 +69,7 @@ async function database() {
   if (!dbReady) {
     dbReady = (async () => {
       const mysql = require('mysql2/promise');
-      dbPool = mysql.createPool({ host: process.env.DB_HOST || '127.0.0.1', port: Number(process.env.DB_PORT || 3306), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME, waitForConnections: true, connectionLimit: 5, charset: 'utf8mb4' });
+      dbPool = mysql.createPool({ ...dbConfig, waitForConnections: true, connectionLimit: 5, connectTimeout: 10000, charset: 'utf8mb4' });
       await dbPool.query('CREATE TABLE IF NOT EXISTS patio_app_state (id TINYINT UNSIGNED PRIMARY KEY, data JSON NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)');
       await dbPool.query('CREATE TABLE IF NOT EXISTS vehicle_catalog (id VARCHAR(100) PRIMARY KEY, plate VARCHAR(20) NOT NULL, plate_aux VARCHAR(20) NULL, linked_plate VARCHAR(20) NULL, chassis VARCHAR(100) NULL, data JSON NOT NULL, INDEX idx_vehicle_catalog_plate (plate), INDEX idx_vehicle_catalog_chassis (chassis))');
       const [stateRows] = await dbPool.query('SELECT id FROM patio_app_state WHERE id = 1 LIMIT 1');

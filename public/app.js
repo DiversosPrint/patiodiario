@@ -87,6 +87,8 @@ async function request(url, options = {}) {
     setConnectionStatus('online');
     return data;
   } catch (error) {
+    const networkFailure = !navigator.onLine || error instanceof TypeError || /Failed to fetch|Load failed|NetworkError|timed out/i.test(error.message || '');
+    if (!networkFailure) throw error;
     if ((options.method || 'GET') === 'GET' && url === '/api/state') { const data = await cachedState(); if (data) { setConnectionStatus('offline'); return data; } }
     if ((options.method || 'GET') === 'GET' && url.startsWith('/api/vehicle-catalog')) { const query = normalizedCatalogValue(new URL(url, location.origin).searchParams.get('q')); const items = (await cachedCatalog()).filter(item => [item.plate, item.plateAux, item.linkedPlate, item.chassis].some(value => normalizedCatalogValue(value).includes(query))).slice(0, 30); setConnectionStatus('offline'); return { items }; }
     if (['POST', 'PUT'].includes(options.method) && !url.includes('/api/login')) { const result = await applyOfflineMutation(url, options); await queueOfflineMutation(url, options, result.vehicle?.id?.startsWith('offline-') ? result.vehicle.id : ''); setConnectionStatus('offline'); return result; }
