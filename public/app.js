@@ -89,6 +89,7 @@ async function request(url, options = {}) {
   } catch (error) {
     const networkFailure = !navigator.onLine || error instanceof TypeError || /Failed to fetch|Load failed|NetworkError|timed out/i.test(error.message || '');
     if (!networkFailure) throw error;
+    error.isNetworkFailure = true;
     if ((options.method || 'GET') === 'GET' && url === '/api/state') { const data = await cachedState(); if (data) { setConnectionStatus('offline'); return data; } }
     if ((options.method || 'GET') === 'GET' && url.startsWith('/api/vehicle-catalog')) { const query = normalizedCatalogValue(new URL(url, location.origin).searchParams.get('q')); const items = (await cachedCatalog()).filter(item => [item.plate, item.plateAux, item.linkedPlate, item.chassis].some(value => normalizedCatalogValue(value).includes(query))).slice(0, 30); setConnectionStatus('offline'); return { items }; }
     if (['POST', 'PUT'].includes(options.method) && !url.includes('/api/login')) { const result = await applyOfflineMutation(url, options); await queueOfflineMutation(url, options, result.vehicle?.id?.startsWith('offline-') ? result.vehicle.id : ''); setConnectionStatus('offline'); return result; }
@@ -714,4 +715,4 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => navigato
 updateInstallButton();
 window.addEventListener('online', () => { setConnectionStatus('online'); syncOfflineQueue(); load().catch(() => {}); });
 window.addEventListener('offline', () => setConnectionStatus('offline'));
-request('/api/me').then(data => enter(data.user)).catch(async () => { const user = await offlineDB.read('cache', 'user').catch(() => null); const cached = await cachedState(); if (user && cached) { setConnectionStatus('offline'); await enter(user); } else loginScreen(); });
+request('/api/me').then(data => enter(data.user)).catch(async error => { const user = await offlineDB.read('cache', 'user').catch(() => null); const cached = await cachedState(); if (error?.isNetworkFailure && user && cached) { setConnectionStatus('offline'); await enter(user); } else loginScreen(); });
