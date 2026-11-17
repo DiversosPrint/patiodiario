@@ -1,4 +1,4 @@
-const CACHE_NAME = 'patio-diversos-print-v10-conexao';
+const CACHE_NAME = 'patio-diversos-print-v11-camera';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

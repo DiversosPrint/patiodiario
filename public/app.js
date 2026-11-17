@@ -514,8 +514,21 @@ function openVehicleTimeline(id) {
   $('#timelineDialog').showModal();
 }
 
-function openVehicle(id = '') {
+let vehicleDraftTimer = null;
+async function saveVehicleDraft() {
+  if ($('#vehicleId')?.value) return;
+  const fields = ['plate', 'brand', 'type', 'model', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'color', 'stage', 'status', 'yard', 'linkedPlates', 'notes'];
+  const draft = Object.fromEntries(fields.map(key => [key, $(`#${key}`)?.value || '']));
+  draft.photos = JSON.parse($('#photos')?.dataset.loaded || '[]');
+  draft.incidentPhotos = JSON.parse($('#incidentPhotos')?.dataset.loaded || '[]');
+  draft.ready = Boolean($('#ready')?.checked);
+  try { await offlineDB.write('cache', 'vehicle-draft', draft); } catch { /* cache opcional */ }
+}
+function scheduleVehicleDraftSave() { clearTimeout(vehicleDraftTimer); vehicleDraftTimer = setTimeout(() => saveVehicleDraft(), 250); }
+async function clearVehicleDraft() { try { await offlineDB.remove('cache', 'vehicle-draft'); } catch { /* cache opcional */ } }
+async function openVehicle(id = '') {
   const vehicle = state.vehicles.find(item => item.id === id);
+  const draft = !vehicle ? await offlineDB.read('cache', 'vehicle-draft').catch(() => null) : null;
   $('#vehicleForm').reset();
   catalogResults = [];
   $('#plateSuggestions').innerHTML = '';
@@ -537,10 +550,18 @@ function openVehicle(id = '') {
     if (activeCategoryFilter?.defaultOperation) $('#operation').value = activeCategoryFilter.defaultOperation;
     if (activeCategoryFilter?.defaultColor) $('#color').value = activeCategoryFilter.defaultColor;
     if (activeYard && activeYard !== 'Todos') $('#yard').value = activeYard;
+    if (draft) {
+      const draftFields = ['plate', 'brand', 'type', 'model', 'enteredAt', 'chassis', 'renavam', 'nf', 'operation', 'color', 'stage', 'status', 'yard', 'linkedPlates', 'notes'];
+      draftFields.forEach(key => { if (draft[key] !== undefined && $(`#${key}`)) $(`#${key}`).value = draft[key]; });
+      $('#photos').dataset.loaded = JSON.stringify(draft.photos || []);
+      $('#incidentPhotos').dataset.loaded = JSON.stringify(draft.incidentPhotos || []);
+      $('#ready').checked = Boolean(draft.ready);
+      $('#catalogHint').textContent = 'Rascunho recuperado após o retorno da câmera';
+    }
   }
   renderChecklistFields(vehicle);
-  renderPhotoPreview(vehicle?.photos || []);
-  renderIncidentPhotoPreview(vehicle?.incidentPhotos || []);
+  renderPhotoPreview(vehicle?.photos || draft?.photos || []);
+  renderIncidentPhotoPreview(vehicle?.incidentPhotos || draft?.incidentPhotos || []);
   toggleColorField();
   $('#deleteVehicle').classList.toggle('hidden', !vehicle || state.user.role !== 'admin');
   $('#vehicleDialog').showModal();
@@ -625,8 +646,8 @@ $('#homeView').addEventListener('keydown', event => {
   }
 });
 
-function compressImage(file, maxSize = 960, quality = .58) { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = reject; reader.onload = () => { const image = new Image(); image.onload = () => { const scale = Math.min(1, maxSize / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale)); canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height); resolve(canvas.toDataURL('image/jpeg', quality)); }; image.onerror = reject; image.src = reader.result; }; reader.readAsDataURL(file); }); }
-async function loadPhotoFiles(input, preview, targetId) { const files = [...(input.files || [])].slice(0, 8); try { const incoming = await Promise.all(files.map(async (file, index) => ({ src: await compressImage(file), label: file.name.replace(/\.[^.]+$/, '') || `Foto ${index + 1}` }))); const target = $(`#${targetId}`); const existing = JSON.parse(target.dataset.loaded || '[]'); const photos = [...existing, ...incoming].slice(0, 8); preview(photos); target.dataset.loaded = JSON.stringify(photos); input.value = ''; } catch { toast('Não foi possível processar uma das imagens.'); } }
+function compressImage(file, maxSize = 960, quality = .58) { return new Promise((resolve, reject) => { const objectUrl = URL.createObjectURL(file); const image = new Image(); image.onload = () => { try { const scale = Math.min(1, maxSize / Math.max(image.width, image.height)); const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale)); const context = canvas.getContext('2d', { alpha: false }); context.drawImage(image, 0, 0, canvas.width, canvas.height); canvas.toBlob(blob => { if (!blob) return reject(new Error('Falha ao comprimir imagem.')); const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); }, 'image/jpeg', quality); } catch (error) { reject(error); } finally { URL.revokeObjectURL(objectUrl); } }; image.onerror = reject; image.src = objectUrl; }); }
+async function loadPhotoFiles(input, preview, targetId) { const files = [...(input.files || [])].slice(0, 8); try { const incoming = await Promise.all(files.map(async (file, index) => ({ src: await compressImage(file), label: file.name.replace(/\.[^.]+$/, '') || `Foto ${index + 1}` }))); const target = $(`#${targetId}`); const existing = JSON.parse(target.dataset.loaded || '[]'); const photos = [...existing, ...incoming].slice(0, 8); preview(photos); target.dataset.loaded = JSON.stringify(photos); input.value = ''; scheduleVehicleDraftSave(); } catch { toast('Não foi possível processar uma das imagens.'); } }
 $('#photos').addEventListener('change', event => loadPhotoFiles(event.target, renderPhotoPreview, 'photos'));
 $('#cameraPhotos').addEventListener('change', event => loadPhotoFiles(event.target, renderPhotoPreview, 'photos'));
 $('#incidentPhotos').addEventListener('change', event => loadPhotoFiles(event.target, renderIncidentPhotoPreview, 'incidentPhotos'));
@@ -673,7 +694,8 @@ $('#weeklyVehicleFilter').onchange = () => renderWeeklyTable(weekDays());
 $('#weeklyTable').onclick = event => { const row = event.target.closest('[data-timeline-id]'); if (row) openVehicleTimeline(row.dataset.timelineId); };
 $('#weeklyTable').onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { const row = event.target.closest('[data-timeline-id]'); if (row) { event.preventDefault(); openVehicleTimeline(row.dataset.timelineId); } } };
 (() => { const scroller = $('.weekly-table'); if (!scroller) return; let dragging = false; let startX = 0; let startScroll = 0; scroller.addEventListener('pointerdown', event => { dragging = true; startX = event.clientX; startScroll = scroller.scrollLeft; scroller.setPointerCapture(event.pointerId); }); scroller.addEventListener('pointermove', event => { if (dragging) scroller.scrollLeft = startScroll - (event.clientX - startX); }); scroller.addEventListener('pointerup', () => { dragging = false; }); scroller.addEventListener('pointercancel', () => { dragging = false; }); })();
-document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => $('#vehicleDialog').close());
+document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => { if (button.closest('#vehicleDialog')) clearVehicleDraft(); $('#vehicleDialog').close(); });
+$('#vehicleForm').addEventListener('input', scheduleVehicleDraftSave);
 $('#vehicleForm').addEventListener('submit', async event => {
   event.preventDefault();
   const id = $('#vehicleId').value;
@@ -683,7 +705,7 @@ $('#vehicleForm').addEventListener('submit', async event => {
   payload.checklist = Object.fromEntries(Object.entries(state.checklistTemplate).map(([area, labels]) => [area, labels.map(label => ({ label, status: $(`#${checklistId(label)}`)?.value || 'pendente', note: '' }))]));
   payload.photos = JSON.parse($('#photos').dataset.loaded || '[]');
   payload.incidentPhotos = JSON.parse($('#incidentPhotos').dataset.loaded || '[]');
-  try { await request(id ? `/api/vehicles/${id}` : '/api/vehicles', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); $('#vehicleDialog').close(); await load(); toast(id ? 'Movimentação registrada.' : 'Veículo registrado no pátio.'); } catch (error) { toast(error.message); }
+  try { await request(id ? `/api/vehicles/${id}` : '/api/vehicles', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) }); await clearVehicleDraft(); $('#vehicleDialog').close(); await load(); toast(id ? 'Movimentação registrada.' : 'Veículo registrado no pátio.'); } catch (error) { toast(error.message); }
 });
 $('#deleteVehicle').onclick = async () => { const id = $('#vehicleId').value; if (!id || !confirm('Excluir este veículo do controle? O histórico será preservado.')) return; try { await request(`/api/vehicles/${id}`, { method: 'DELETE' }); $('#vehicleDialog').close(); await load(); toast('Veículo excluído.'); } catch (error) { toast(error.message); } };
 function generatePdfReport() {
